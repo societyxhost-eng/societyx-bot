@@ -22,9 +22,9 @@ module.exports = {
         const guildId = interaction.guild.id;
         const indice = interaction.options.getInteger('indice');
 
-        const warnings = warningSystem.getAllWarnings(guildId)[user.id] || [];
-
         if (!user) return interaction.reply({ content: 'Usuário não encontrado.', flags: [MessageFlags.Ephemeral] });
+
+        const warnings = warningSystem.getAllWarnings(guildId)[user.id] || [];
         if (warnings.length === 0) return interaction.reply({ content: 'Este usuário não possui warnings.', flags: [MessageFlags.Ephemeral] });
 
         let removedWarning;
@@ -32,17 +32,17 @@ module.exports = {
             if (indice < 1 || indice > warnings.length) {
                 return interaction.reply({ content: 'Índice inválido.', flags: [MessageFlags.Ephemeral] });
             }
-            warnings.splice(indice - 1, 1);
+            removedWarning = warnings.splice(indice - 1, 1)[0];
         } else {
-            warnings.pop(); // remove o último warning se nenhum índice for especificado
+            removedWarning = warnings.pop(); 
         }
 
-        // Atualiza no sistema
         const allWarnings = warningSystem.getAllWarnings(guildId);
         allWarnings[user.id] = warnings;
-        require('../utils/warningSystem').saveWarnings(allWarnings);
+        warningSystem.saveWarnings(allWarnings);
 
         await interaction.reply({ content: `Warning removido de ${user.tag} com sucesso!`, flags: [MessageFlags.Ephemeral] });
+
         logAction(interaction.client, {
             action: 'Unwarn',
             moderator: interaction.user,

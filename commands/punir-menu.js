@@ -3,11 +3,11 @@ const { logAction } = require("../utils/logger");
 
 module.exports = {
     data: new SlashCommandBuilder()
-        .setName("punirmenu")
-        .setDescription("Aplica punições a um usuário (ban, kick, timeout, warn) através de menu")
+        .setName("punir")
+        .setDescription("Aplica punições a um usuário (ban, kick, timeout, warn)")
         .addStringOption(option =>
             option
-                .setName("tipo")                                                                        
+                .setName("tipo")
                 .setDescription("Tipo de punição")
                 .setRequired(true)
                 .addChoices(

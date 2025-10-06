@@ -22,14 +22,15 @@ module.exports = {
             const deleted = await interaction.channel.bulkDelete(amount, true);
 
             await interaction.editReply({
-                content: `✅ ${deleted.size} mensagens foram deletadas.`
+                content: `✅ ${deleted.size} mensagens foram deletadas do canal #${interaction.channel.name}.`
             });
 
-            logAction(interaction.client, {
+            await logAction(interaction.client, {
                 action: "Clear",
                 moderator: interaction.user,
                 target: null,
-                reason: `${deleted.size} mensagens deletadas no canal #${interaction.channel.name}`
+                reason: `Limpeza de mensagens no canal #${interaction.channel.name}`,
+                extra: `${deleted.size} mensagens deletadas`
             });
 
         } catch (err) {

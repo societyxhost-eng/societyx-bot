@@ -23,31 +23,29 @@ module.exports = {
 
         try {
             await interaction.deferReply({ ephemeral: true });
-            
-            // Busca as mensagens
+
             const messages = await interaction.channel.messages.fetch({ limit: fetchAmount });
-            
-            // Filtra mensagens do usuário específico
+
             const userMessages = messages.filter(msg => msg.author.id === targetUser.id);
-            
+
             if (userMessages.size === 0) {
                 return await interaction.editReply({
                     content: `❌ Nenhuma mensagem de **${targetUser.tag}** foi encontrada nas últimas ${fetchAmount} mensagens.`
                 });
             }
-            
-            // Deleta as mensagens
+
             await interaction.channel.bulkDelete(userMessages, true);
-            
+
             await interaction.editReply({
-                content: `✅ ${userMessages.size} mensagens de **${targetUser.tag}** foram deletadas.`
+                content: `✅ ${userMessages.size} mensagens de **${targetUser.tag}** foram deletadas no canal #${interaction.channel.name}.`
             });
 
-            logAction(interaction.client, {
+            await logAction(interaction.client, {
                 action: "Clear",
                 moderator: interaction.user,
                 target: targetUser,
-                reason: `${userMessages.size} mensagens deletadas no canal #${interaction.channel.name}`
+                reason: `Mensagens deletadas no canal #${interaction.channel.name}`,
+                extra: `${userMessages.size} mensagens deletadas`
             });
 
         } catch (err) {
