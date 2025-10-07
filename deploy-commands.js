@@ -8,34 +8,29 @@ const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
 async function deployCommands() {
     const commands = [];
-    const commandFiles = fs.readdirSync(path.join(__dirname, 'commands')).filter(file => file.endsWith('.js'));
+    const commandsDir = path.join(__dirname, 'commands');
+    const commandFiles = fs.readdirSync(commandsDir)
+        .filter(file => file.endsWith('.js') && file !== 'modal-handler.js' && file !== 'messagelogs.js');
 
     for (const file of commandFiles) {
-        // Ignorar arquivos que não são comandos válidos
-        if (file === 'modal-handler.js') {
-            console.log(`Ignorando ${file} (não é um comando)`);
-            continue;
-        }
-
-        const commandModule = require(`./commands/${file}`);
-        // Se estiver exportando { data, execute } como CommonJS
-        if (commandModule.data?.toJSON) {
-            commands.push(commandModule.data.toJSON());
+        const mod = require(path.join(commandsDir, file));
+        if (mod.data?.toJSON) {
+            commands.push(mod.data.toJSON());
             console.log(`✅ Comando carregado: ${file}`);
         } else {
-            console.error(`❌ O comando ${file} não possui data.toJSON()`);
+            console.warn(`⚠️ ${file} não possui data.toJSON(), pulando.`);
         }
     }
 
     try {
-        console.log('Atualizando comandos slash...');
+        console.log('Atualizando comandos slash (guild)...');
         await rest.put(
             Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
             { body: commands }
         );
         console.log('Comandos atualizados!');
     } catch (error) {
-        console.error(error);
+        console.error('Erro ao atualizar comandos:', error);
     }
 }
 

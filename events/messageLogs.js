@@ -1,98 +1,105 @@
-const { Events } = require('discord.js');
-const { ContainerBuilder } = require('discord.js');
+const {
+  Events,
+  MessageFlags,
+  ContainerBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder,
+} = require('discord.js');
 
-module.exports = (client) => {
-  // Evento para mensagens criadas
+// Canal fixo de logs (pode trocar por env: process.env.MESSAGE_LOG_CHANNEL_ID)
+const LOG_CHANNEL_ID = '1424515588700639393';
+
+function safeText(text) {
+  if (!text || String(text).trim().length === 0) return 'Sem conteúdo';
+  const t = String(text);
+  return t.length > 1800 ? t.slice(0, 1797) + '...' : t;
+}
+
+function sendContainer(channel, container) {
+  return channel.send({
+    components: [container],
+    flags: MessageFlags.IsComponentsV2,
+  });
+}
+
+module.exports = function messageLogs(client) {
+  const getLogChannel = () => client.channels.cache.get(LOG_CHANNEL_ID);
+
+  // Mensagem criada
   client.on(Events.MessageCreate, async (message) => {
-    if (message.author.bot) return;
-    
-    // Lógica para mensagens criadas, se necessário
-  });
-
-  // Evento para mensagens editadas
-  client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
-    if (oldMessage.author?.bot) return;
-    if (oldMessage.content === newMessage.content) return;
-    
-    const guild = oldMessage.guild;
-    if (!guild) return;
-    
-    const logChannel = getLogChannel(guild);
-    if (!logChannel) return;
-    
-    // Usando EmbedBuilder em vez de ContainerBuilder para mensagens editadas
-    const { EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
-    
-    const embed = new EmbedBuilder()
-      .setTitle('Mensagem Editada')
-      .setColor(0xFFA500) // Laranja
-      .setAuthor({
-        name: oldMessage.author?.tag || 'Usuário desconhecido',
-        iconURL: oldMessage.author?.displayAvatarURL() || null
-      })
-      .addFields(
-        { name: 'Canal', value: `<#${oldMessage.channel.id}>`, inline: true },
-        { name: 'ID do Usuário', value: oldMessage.author?.id || 'Desconhecido', inline: true },
-        { name: 'Mensagem Original', value: oldMessage.content || 'Sem conteúdo' },
-        { name: 'Mensagem Editada', value: newMessage.content || 'Sem conteúdo' }
-      )
-      .setFooter({ text: `ID da Mensagem: ${oldMessage.id} • ${new Date().toLocaleString()}` });
-    
-    const button = new ButtonBuilder()
-      .setLabel('Ver Canal')
-      .setStyle(ButtonStyle.Link)
-      .setURL(`https://discord.com/channels/${guild.id}/${oldMessage.channel.id}/${oldMessage.id}`);
-    
-    const row = new ActionRowBuilder().addComponents(button);
-    
-    await logChannel.send({ embeds: [embed], components: [row] });
-  });
-
-  // Evento para mensagens excluídas
-  client.on(Events.MessageDelete, async (message) => {
     if (message.author?.bot) return;
-    
-    const guild = message.guild;
-    if (!guild) return;
-    
-    const logChannel = getLogChannel(guild);
+    const logChannel = getLogChannel();
     if (!logChannel) return;
-    
-    const { EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
-    
-    const embed = new EmbedBuilder()
-      .setTitle('Mensagem Excluída')
-      .setColor(0xFF0000) // Vermelho
-      .setAuthor({
-        name: message.author?.tag || 'Usuário desconhecido',
-        iconURL: message.author?.displayAvatarURL() || null
-      })
-      .addFields(
-        { name: 'Canal', value: `<#${message.channel.id}>`, inline: true },
-        { name: 'ID do Usuário', value: message.author?.id || 'Desconhecido', inline: true },
-        { name: 'Conteúdo', value: message.content || 'Sem conteúdo' }
-      )
-      .setFooter({ text: `ID da Mensagem: ${message.id} • ${new Date().toLocaleString()}` });
-    
-    // Adicionar anexos, se houver
-    if (message.attachments.size > 0) {
-      const attachmentLinks = message.attachments.map(a => `[${a.name}](${a.url})`).join('\n');
-      embed.addFields({ name: 'Anexos', value: attachmentLinks });
-    }
-    
-    const button = new ButtonBuilder()
-      .setLabel('Ver Canal')
-      .setStyle(ButtonStyle.Link)
-      .setURL(`https://discord.com/channels/${guild.id}/${message.channel.id}`);
-    
-    const row = new ActionRowBuilder().addComponents(button);
-    
-    await logChannel.send({ embeds: [embed], components: [row] });
+
+    const container = new ContainerBuilder();
+    container.setComponents([
+      new TextDisplayBuilder()
+        .setTitle('Mensagem Criada')
+        .setContent(
+          `Autor: ${message.author?.tag || 'Desconhecido'}\n` +
+          `Canal: #${message.channel?.name || 'DM'}`
+        ),
+      new SeparatorBuilder(),
+      new TextDisplayBuilder()
+        .setTitle('Conteúdo')
+        .setContent(safeText(message.content)),
+    ]);
+
+    try {
+      await sendContainer(logChannel, container);
+    } catch (_) {}
   });
-  
-  // Canal de logs com ID específico
-  const getLogChannel = (guild) => {
-    return guild.channels.cache.get('1410325110488956989') || 
-           guild.channels.cache.find(ch => ch.name === 'logs' || ch.name === 'registro');
-  };
+
+  // Mensagem editada
+  client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
+    const logChannel = getLogChannel();
+    if (!logChannel) return;
+
+    const author = newMessage.author || oldMessage.author;
+    if (author?.bot) return;
+
+    const before = safeText(oldMessage.content);
+    const after = safeText(newMessage.content);
+    const channelName = newMessage.channel?.name || oldMessage.channel?.name || 'DM';
+
+    const container = new ContainerBuilder();
+    container.setComponents([
+      new TextDisplayBuilder()
+        .setTitle('Mensagem Editada')
+        .setContent(
+          `Autor: ${author?.tag || 'Desconhecido'}\n` +
+          `Canal: #${channelName}`
+        ),
+      new TextDisplayBuilder().setTitle('Antes').setContent(before),
+      new SeparatorBuilder(),
+      new TextDisplayBuilder().setTitle('Depois').setContent(after),
+    ]);
+
+    try {
+      await sendContainer(logChannel, container);
+    } catch (_) {}
+  });
+
+  // Mensagem deletada
+  client.on(Events.MessageDelete, async (message) => {
+    const logChannel = getLogChannel();
+    if (!logChannel) return;
+    if (message.author?.bot) return;
+
+    const container = new ContainerBuilder();
+    container.setComponents([
+      new TextDisplayBuilder()
+        .setTitle('Mensagem Deletada')
+        .setContent(
+          `Autor: ${message.author?.tag || 'Desconhecido'}\n` +
+          `Canal: #${message.channel?.name || 'DM'}`
+        ),
+      new SeparatorBuilder(),
+      new TextDisplayBuilder().setTitle('Conteúdo').setContent(safeText(message.content)),
+    ]);
+
+    try {
+      await sendContainer(logChannel, container);
+    } catch (_) {}
+  });
 };
