@@ -2,104 +2,182 @@ const {
   SlashCommandBuilder,
   PermissionFlagsBits,
   Events,
-  EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  MessageFlags,
+  ContainerBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder,
+  SeparatorSpacingSize
 } = require('discord.js');
+
+const FIXED_LOG_CHANNEL_ID = '1424515588700639393';
+
+const createMessageLogPayloadV2 = (message, type, oldContent = null) => {
+  const content = message.content?.length > 1800 ? message.content.slice(0, 1797) + '...' : message.content;
+  const oldContentTruncated = oldContent?.length > 1800 ? oldContent.slice(0, 1797) + '...' : oldContent;
+
+  const container = new ContainerBuilder();
+
+  // Título
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(type === 'edit' ? '✏️ **Mensagem Editada**' : '🗑️ **Mensagem Excluída**')
+  );
+  // Metadados
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`**👤 Autor:** <@${message.author.id}>`),
+    new TextDisplayBuilder().setContent(`**📍 Canal:** <#${message.channel.id}>`)
+  );
+
+  // Separador
+  container.addSeparatorComponents(
+    new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small)
+  );
+
+  if (type === 'edit') {
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('**💭 Antes:**'),
+      new TextDisplayBuilder().setContent(oldContentTruncated ? `\`\`\`diff\n- ${oldContentTruncated}\n\`\`\`` : '*(Sem texto)*')
+    );
+    container.addSeparatorComponents(
+      new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small)
+    );
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('**💭 Depois:**'),
+      new TextDisplayBuilder().setContent(content ? `\`\`\`diff\n+ ${content}\n\`\`\`` : '*(Sem texto)*')
+    );
+  } else {
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('**💭 Conteúdo:**'),
+      new TextDisplayBuilder().setContent(content ? `\`\`\`\n${content}\n\`\`\`` : '*(Mensagem sem texto — possivelmente apenas anexos)*')
+    );
+  }
+
+  // Anexos
+  if (message.attachments?.size > 0) {
+    const attachments = message.attachments.map(a => `[📎 Anexo](${a.url})`).join('\n');
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small));
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`**🖼️ Anexos:**\n${attachments}`)
+    );
+  }
+
+  // Rodapé
+  container.addSeparatorComponents(
+    new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small)
+  );
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`*Sistema de Logs • ${type === 'edit' ? 'Edição' : 'Exclusão'}*`)
+  );
+
+  const linkRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setLabel('🔗 Ver no Canal')
+      .setStyle(ButtonStyle.Link)
+      .setURL(`https://discord.com/channels/${message.guild.id}/${message.channel.id}`)
+  );
+  container.addActionRowComponents(linkRow);
+
+  return {
+    components: [container],
+    flags: MessageFlags.IsComponentsV2,
+  };
+};
+
+const createMessageLogContainer = (message, type, oldContent = null) => {
+  const content = message.content?.length > 1024 ? message.content.slice(0, 1021) + '...' : message.content;
+  const oldContentTruncated = oldContent?.length > 1024 ? oldContent.slice(0, 1021) + '...' : oldContent;
+
+  const container = new ContainerBuilder();
+
+  const linkButton = new ButtonBuilder()
+    .setLabel('🔗 Ver no Canal')
+    .setStyle(ButtonStyle.Link)
+    .setURL(`https://discord.com/channels/${message.guild.id}/${message.channel.id}`);
+
+  switch (type) {
+    case 'edit':
+      container
+        .setTitle('✏️ Mensagem Editada')
+        .addTextDisplayComponents(t => t.setContent(''))
+        .addTextDisplayComponents(t => t.setContent(`**👤 Autor:** <@${message.author.id}>`))
+        .addTextDisplayComponents(t => t.setContent(`**📍 Canal:** <#${message.channel.id}>`))
+        .addTextDisplayComponents(t => t.setContent('────────────────────────────────────'))
+        .addTextDisplayComponents(t => t.setContent(`**💭 Antes:**`))
+        .addTextDisplayComponents(t => t.setContent(`${oldContentTruncated ? `\`\`\`diff\n- ${oldContentTruncated}\n\`\`\`` : '*(Sem texto)*'}`))
+        .addTextDisplayComponents(t => t.setContent(''))
+        .addTextDisplayComponents(t => t.setContent(`**💭 Depois:**`))
+        .addTextDisplayComponents(t => t.setContent(`${content ? `\`\`\`diff\n+ ${content}\n\`\`\`` : '*(Sem texto)*'}`))
+        .addTextDisplayComponents(t => t.setContent(''))
+        .addTextDisplayComponents(t => t.setContent('*Sistema de Logs • Edição*'));
+      break;
+
+    case 'delete':
+      container
+        .setTitle('🗑️ Mensagem Excluída')
+        .addTextDisplayComponents(t => t.setContent(''))
+        .addTextDisplayComponents(t => t.setContent(`**👤 Autor:** <@${message.author.id}>`))
+        .addTextDisplayComponents(t => t.setContent(`**📍 Canal:** <#${message.channel.id}>`))
+        .addTextDisplayComponents(t => t.setContent('────────────────────────────────────'))
+        .addTextDisplayComponents(t => t.setContent(`**💭 Conteúdo:**`))
+        .addTextDisplayComponents(t => t.setContent(`${content ? `\`\`\`\n${content}\n\`\`\`` : '*(Mensagem sem texto — possivelmente apenas anexos)*'}`))
+        .addTextDisplayComponents(t => t.setContent(''))
+        .addTextDisplayComponents(t => t.setContent('*Sistema de Logs • Exclusão*'));
+      linkButton.setLabel('🔗 Ver Canal');
+      break;
+  }
+
+  if (message.attachments.size > 0) {
+    const attachments = message.attachments.map(a => `[📎 Anexo](${a.url})`).join('\n');
+    container
+      .addSeparatorComponents(s => s)
+      .addTextDisplayComponents(t => t.setContent(`**🖼️ Anexos:**\n${attachments}`));
+  }
+
+  container.setFooter(type === 'edit' ? 'Sistema de Logs • Edição' : 'Sistema de Logs • Exclusão');
+
+  const actionRow = new ActionRowBuilder().addComponents(linkButton);
+  container.addComponent(actionRow);
+  return container;
+};
+
+const createStatusPayload = (logChannel) => {
+  const text = [
+    '# 📊 Status do Sistema de Logs',
+    '',
+    logChannel
+      ? `✅ O sistema de logs está **ativo** no canal ${logChannel}.`
+      : '⚠️ O sistema de logs **não está configurado**.',
+    '',
+    `*Sistema de Logs • Status*\n*${new Date().toLocaleString('pt-BR')}*`
+  ].join('\n');
+  return { content: text };
+};
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('msglogs')
-    .setDescription('Configura o sistema de logs de mensagens')
+    .setDescription('Mostra o status do sistema de logs')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addSubcommand(subcommand =>
-      subcommand
-        .setName('configurar')
-        .setDescription('Configura o canal de logs')
-        .addChannelOption(option =>
-          option.setName('canal')
-            .setDescription('Canal onde os logs serão enviados')
-            .setRequired(true)))
     .addSubcommand(subcommand =>
       subcommand
         .setName('status')
         .setDescription('Verifica o status do sistema de logs')),
 
-  async execute(interaction, client) {
-    if (interaction.options.getSubcommand() === 'configurar') {
-      const channel = interaction.options.getChannel('canal');
-      await interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle('✅ Canal de Logs Configurado')
-            .setDescription(`Os logs serão enviados em ${channel}.`)
-            .setColor('#00BFFF')
-            .setFooter({ text: 'Sistema de Logs • Configuração' })
-            .setTimestamp()
-        ],
-        ephemeral: true
-      });
-    } else if (interaction.options.getSubcommand() === 'status') {
-      const logChannel = interaction.guild.channels.cache.get('1424515588700639393') ||
-        interaction.guild.channels.cache.find(ch => ch.name === 'logs' || ch.name === 'registro');
-
-      const embed = new EmbedBuilder()
-        .setTitle('📊 Status do Sistema de Logs')
-        .setColor(logChannel ? '#00FF7F' : '#FF6347')
-        .setDescription(
-          logChannel
-            ? `✅ O sistema de logs está **ativo** no canal ${logChannel}.`
-            : '⚠️ O sistema de logs **não está configurado**.'
-        )
-        .setFooter({ text: 'Sistema de Logs • Status' })
-        .setTimestamp();
-
-      await interaction.reply({ embeds: [embed], ephemeral: true });
-    }
+  async execute(interaction) {
+    const logChannel = interaction.guild.channels.cache.get(FIXED_LOG_CHANNEL_ID) ||
+      interaction.guild.channels.cache.find(ch => ch.name === 'logs' || ch.name === 'registro');
+    const payload = createStatusPayload(logChannel);
+    await interaction.reply({ content: payload.content, ephemeral: true });
   },
 
   init: (client) => {
     const getLogChannel = (guild) => {
-      return guild.channels.cache.get('1424515588700639393') ||
+      return guild.channels.cache.get(FIXED_LOG_CHANNEL_ID) ||
         guild.channels.cache.find(ch => ch.name === 'logs' || ch.name === 'registro');
     };
 
-    // 📩 NOVA MENSAGEM
-    client.on(Events.MessageCreate, async (message) => {
-      if (message.author?.bot) return;
-      const logChannel = getLogChannel(message.guild);
-      if (!logChannel) return;
-
-      const content = message.content?.length > 1024 ? message.content.slice(0, 1021) + '...' : message.content;
-
-      const embed = new EmbedBuilder()
-        .setAuthor({ name: message.author.tag, iconURL: message.author.displayAvatarURL() })
-        .setTitle('💬 Nova Mensagem Enviada')
-        .setColor('#00FF7F')
-        .addFields(
-          { name: '👤 Autor', value: `<@${message.author.id}>`, inline: true },
-          { name: '📍 Canal', value: `<#${message.channel.id}>`, inline: true },
-          { name: '🆔 ID do Usuário', value: message.author.id, inline: false },
-          { name: '💭 Conteúdo', value: content ? `\`\`\`\n${content}\n\`\`\`` : '*(Sem texto — apenas anexos)*' }
-        )
-        .setFooter({ text: `Enviada em ${new Date().toLocaleString('pt-BR')}` })
-        .setTimestamp();
-
-      if (message.attachments.size > 0) {
-        const attachments = message.attachments.map(a => `[📎 Anexo](${a.url})`).join('\n');
-        embed.addFields({ name: '🖼️ Anexos', value: attachments });
-      }
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setLabel('🔗 Ver no Canal')
-          .setStyle(ButtonStyle.Link)
-          .setURL(`https://discord.com/channels/${message.guild.id}/${message.channel.id}`)
-      );
-
-      await logChannel.send({ embeds: [embed], components: [row] });
-    });
 
     // ✏️ MENSAGEM EDITADA
     client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
@@ -110,30 +188,12 @@ module.exports = {
       const logChannel = getLogChannel(newMessage.guild);
       if (!logChannel) return;
 
-      const original = oldMessage.content.length > 1024 ? oldMessage.content.slice(0, 1021) + '...' : oldMessage.content;
-      const edited = newMessage.content.length > 1024 ? newMessage.content.slice(0, 1021) + '...' : newMessage.content;
-
-      const embed = new EmbedBuilder()
-        .setAuthor({ name: oldMessage.author.tag, iconURL: oldMessage.author.displayAvatarURL() })
-        .setTitle('✏️ Mensagem Editada')
-        .setColor('#FFA500')
-        .addFields(
-          { name: '👤 Autor', value: `<@${oldMessage.author.id}>`, inline: true },
-          { name: '📍 Canal', value: `<#${oldMessage.channel.id}>`, inline: true },
-          { name: '💭 Antes', value: `\`\`\`diff\n- ${original}\n\`\`\`` },
-          { name: '💭 Depois', value: `\`\`\`diff\n+ ${edited}\n\`\`\`` }
-        )
-        .setFooter({ text: `Editada em ${new Date().toLocaleString('pt-BR')}` })
-        .setTimestamp();
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setLabel('🔗 Ver no Canal')
-          .setStyle(ButtonStyle.Link)
-          .setURL(`https://discord.com/channels/${oldMessage.guild.id}/${oldMessage.channel.id}`)
-      );
-
-      await logChannel.send({ embeds: [embed], components: [row] });
+      try {
+        const payload = createMessageLogPayloadV2(newMessage, 'edit', oldMessage.content);
+        await logChannel.send(payload);
+      } catch (err) {
+        console.error('Falha ao construir/enviar log de edição:', err);
+      }
     });
 
     // 🗑️ MENSAGEM EXCLUÍDA
@@ -144,33 +204,12 @@ module.exports = {
       const logChannel = getLogChannel(message.guild);
       if (!logChannel) return;
 
-      const content = message.content?.length > 1024 ? message.content.slice(0, 1021) + '...' : message.content;
-
-      const embed = new EmbedBuilder()
-        .setAuthor({ name: message.author.tag, iconURL: message.author.displayAvatarURL() })
-        .setTitle('🗑️ Mensagem Excluída')
-        .setColor('#FF4040')
-        .addFields(
-          { name: '👤 Autor', value: `<@${message.author.id}>`, inline: true },
-          { name: '📍 Canal', value: `<#${message.channel.id}>`, inline: true },
-          { name: '💭 Conteúdo', value: content ? `\`\`\`\n${content}\n\`\`\`` : '*(Mensagem sem texto — possivelmente apenas anexos)*' }
-        )
-        .setFooter({ text: `Excluída em ${new Date().toLocaleString('pt-BR')}` })
-        .setTimestamp();
-
-      if (message.attachments.size > 0) {
-        const attachments = message.attachments.map(a => `[📎 Anexo](${a.url})`).join('\n');
-        embed.addFields({ name: '🖼️ Anexos', value: attachments });
+      try {
+        const payload = createMessageLogPayloadV2(message, 'delete');
+        await logChannel.send(payload);
+      } catch (err) {
+        console.error('Falha ao construir/enviar log de exclusão:', err);
       }
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setLabel('🔗 Ver Canal')
-          .setStyle(ButtonStyle.Link)
-          .setURL(`https://discord.com/channels/${message.guild.id}/${message.channel.id}`)
-      );
-
-      await logChannel.send({ embeds: [embed], components: [row] });
     });
   }
 };

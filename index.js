@@ -23,6 +23,15 @@ for (const file of commandFiles) {
     if (command.data && command.execute) {
         client.commands.set(command.data.name, command);
     }
+    // Se o comando expõe um inicializador, chamamos aqui
+    if (typeof command.init === 'function') {
+        try {
+            command.init(client);
+            console.log(`🔧 Init aplicado para: ${file}`);
+        } catch (err) {
+            console.error(`Erro ao inicializar ${file}:`, err);
+        }
+    }
 }
 
 

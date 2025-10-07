@@ -11,12 +11,19 @@ async function deployCommands() {
     const commandFiles = fs.readdirSync(path.join(__dirname, 'commands')).filter(file => file.endsWith('.js'));
 
     for (const file of commandFiles) {
+        // Ignorar arquivos que não são comandos válidos
+        if (file === 'modal-handler.js') {
+            console.log(`Ignorando ${file} (não é um comando)`);
+            continue;
+        }
+
         const commandModule = require(`./commands/${file}`);
         // Se estiver exportando { data, execute } como CommonJS
         if (commandModule.data?.toJSON) {
             commands.push(commandModule.data.toJSON());
+            console.log(`✅ Comando carregado: ${file}`);
         } else {
-            console.error(`O comando ${file} não possui data.toJSON()`);
+            console.error(`❌ O comando ${file} não possui data.toJSON()`);
         }
     }
 

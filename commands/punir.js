@@ -36,7 +36,7 @@ function parseDuration(input) {
 
 module.exports = {
     data: new SlashCommandBuilder()
-        .setName('punir')
+        .setName('timeout')
         .setDescription('Aplica timeout em um usuário')
         .addUserOption(option =>
             option.setName('usuario')
