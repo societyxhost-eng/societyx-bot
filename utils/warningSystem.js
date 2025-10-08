@@ -3,14 +3,12 @@ const path = require("path");
 
 const filePath = path.join(__dirname, "..", "warnings.json");
 
-// Função auxiliar para carregar os warnings
 function loadWarnings() {
     try {
         if (!fs.existsSync(filePath)) {
             fs.writeFileSync(filePath, JSON.stringify({}, null, 2));
             return {};
         }
-
         const data = fs.readFileSync(filePath, "utf8");
         return data ? JSON.parse(data) : {};
     } catch (err) {
@@ -19,7 +17,6 @@ function loadWarnings() {
     }
 }
 
-// Função auxiliar para salvar
 function saveWarnings(warnings) {
     try {
         fs.writeFileSync(filePath, JSON.stringify(warnings, null, 2));
@@ -28,48 +25,63 @@ function saveWarnings(warnings) {
     }
 }
 
-// Adiciona um warning
+function generateId() {
+    return Math.random().toString(36).substring(2, 9);
+}
+
 function addWarning(guildId, userId, reason) {
     const warnings = loadWarnings();
-
     if (!warnings[guildId]) warnings[guildId] = {};
     if (!warnings[guildId][userId]) warnings[guildId][userId] = [];
-
     const newWarning = {
+        id: generateId(),
         reason,
         timestamp: Date.now(),
         userId
     };
-
     warnings[guildId][userId].push(newWarning);
-
     saveWarnings(warnings);
-    return warnings[guildId][userId].length; // retorna total de warnings do usuário
+    return { warning: newWarning, totalWarnings: warnings[guildId][userId].length };
 }
 
-// Retorna todos os warnings de um servidor
+function removeWarning(guildId, userId, warningId) {
+    const allWarnings = loadWarnings();
+    if (!allWarnings[guildId] || !allWarnings[guildId][userId]) {
+        return null;
+    }
+
+    let removedWarning = null;
+    const userWarnings = allWarnings[guildId][userId];
+    const warningIndex = userWarnings.findIndex(w => w.id === warningId);
+
+    if (warningIndex !== -1) {
+        removedWarning = userWarnings.splice(warningIndex, 1)[0];
+        if (userWarnings.length === 0) {
+            delete allWarnings[guildId][userId];
+        }
+        saveWarnings(allWarnings);
+    }
+    return removedWarning;
+}
+
 function getAllWarnings(guildId) {
     const warnings = loadWarnings();
     return warnings[guildId] || {};
 }
 
-// Retorna os warnings de um usuário específico
 function getUserWarnings(guildId, userId) {
     const warnings = loadWarnings();
     return warnings[guildId]?.[userId] || [];
 }
 
-// Reseta os warnings de um usuário
 function resetWarnings(guildId, userId) {
     const warnings = loadWarnings();
-
     if (warnings[guildId] && warnings[guildId][userId]) {
         delete warnings[guildId][userId];
         saveWarnings(warnings);
     }
 }
 
-// Reseta todos os warnings de um servidor
 function resetAllWarnings(guildId) {
     const warnings = loadWarnings();
     if (warnings[guildId]) {
@@ -78,12 +90,33 @@ function resetAllWarnings(guildId) {
     }
 }
 
-// Exporta
+function removeOldWarnings(guildId, userId) {
+    const warnings = loadWarnings();
+    if (warnings[guildId] && warnings[guildId][userId]) {
+        const originalCount = warnings[guildId][userId].length;
+        const updatedWarnings = warnings[guildId][userId].filter(w => w && w.id);
+        if (updatedWarnings.length === originalCount) {
+            return 0;
+        }
+        const removedCount = originalCount - updatedWarnings.length;
+        if (updatedWarnings.length === 0) {
+            delete warnings[guildId][userId];
+        } else {
+            warnings[guildId][userId] = updatedWarnings;
+        }
+        saveWarnings(warnings);
+        return removedCount;
+    }
+    return 0;
+}
+
 module.exports = {
     addWarning,
+    removeWarning, 
     getAllWarnings,
     getUserWarnings,
     resetWarnings,
     resetAllWarnings,
     saveWarnings,
+    removeOldWarnings
 };

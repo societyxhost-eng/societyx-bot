@@ -6,83 +6,91 @@ module.exports = {
         .setName('addrole')
         .setDescription('Adiciona um cargo a um usuário')
         .addUserOption(option =>
-            option.setName('usuario')
+            option
+                .setName('usuario')
                 .setDescription('Usuário que receberá o cargo')
                 .setRequired(true)
         )
         .addRoleOption(option =>
-            option.setName('cargo')
+            option
+                .setName('cargo')
                 .setDescription('Cargo a ser adicionado')
                 .setRequired(true)
-        )
-        .addStringOption(option =>
-            option.setName('motivo')
-                .setDescription('Motivo para adicionar o cargo')
-                .setRequired(false)
         )
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
 
     async execute(interaction) {
         const user = interaction.options.getUser('usuario');
         const role = interaction.options.getRole('cargo');
-        const reason = interaction.options.getString('motivo') || 'Não informado';
         const moderator = interaction.user;
 
         try {
+            // Buscar o membro no servidor
             const member = await interaction.guild.members.fetch(user.id);
-
+            
+            // Verificar se o membro já possui o cargo
             if (member.roles.cache.has(role.id)) {
-                return interaction.reply({
-                    content: `❌ O usuário ${user.tag} já possui o cargo ${role.name}.`,
+                return await interaction.reply({
+                    content: `O usuário ${user.tag} já possui o cargo ${role.name}.`,
                     ephemeral: true
                 });
             }
 
-            if (role.position >= interaction.guild.members.me.roles.highest.position) {
-                return interaction.reply({
-                    content: `❌ Não posso adicionar o cargo ${role.name} porque ele está acima da minha hierarquia.`,
+            // Verificar se o bot tem permissão para gerenciar o cargo
+            const botMember = interaction.guild.members.me;
+            if (role.position >= botMember.roles.highest.position) {
+                return await interaction.reply({
+                    content: `Não posso adicionar o cargo ${role.name} pois ele está acima da minha hierarquia.`,
                     ephemeral: true
                 });
             }
 
-            if (role.position >= interaction.member.roles.highest.position && interaction.guild.ownerId !== moderator.id) {
-                return interaction.reply({
-                    content: `❌ Você não tem permissão para adicionar o cargo ${role.name} pois ele está acima da sua hierarquia.`,
+            // Verificar se o moderador tem permissão para gerenciar o cargo
+            if (role.position >= interaction.member.roles.highest.position && interaction.guild.ownerId !== interaction.user.id) {
+                return await interaction.reply({
+                    content: `Você não tem permissão para adicionar o cargo ${role.name} pois ele está acima da sua hierarquia.`,
                     ephemeral: true
                 });
             }
 
+            // Adicionar o cargo ao membro
             await member.roles.add(role, `Cargo adicionado por ${moderator.tag} - Motivo: ${reason}`);
 
+            // Resposta de sucesso
             await interaction.reply({
-                content: `✅ Cargo **${role.name}** adicionado ao usuário **${user.tag}** com sucesso!`,
+                content: `Cargo ${role.name} adicionado com sucesso ao usuário ${user.mention}!`,
                 ephemeral: false
             });
 
-            await logAction(interaction.client, {
-                action: 'Cargo Adicionado',
-                moderator,
-                target: user,
-                reason,
-                extra: `Cargo: ${role.name}`
-            });
+            // Log da ação
+            try {
+                await logAction(interaction.guild, {
+                    action: 'Cargo Adicionado',
+                    moderator: moderator,
+                    target: user,
+                    reason: reason,
+                    details: `Cargo: ${role.name}`
+                });
+            } catch (logError) {
+                console.error('Erro ao registrar log:', logError);
+            }
 
         } catch (error) {
             console.error('Erro ao adicionar cargo:', error);
-
+            
             if (error.code === 50013) {
-                return interaction.reply({
-                    content: '❌ Não tenho permissões suficientes para adicionar este cargo.',
+                await interaction.reply({
+                    content: 'Não tenho permissões suficientes para adicionar este cargo.',
                     ephemeral: true
                 });
             } else if (error.code === 10007) {
-                return interaction.reply({
-                    content: '❌ Usuário não encontrado no servidor.',
+                await interaction.reply({
+                    content: 'Usuário não encontrado no servidor.',
                     ephemeral: true
                 });
             } else {
-                return interaction.reply({
-                    content: '❌ Ocorreu um erro ao tentar adicionar o cargo. Tente novamente.',
+                await interaction.reply({
+                    content: 'Ocorreu um erro ao tentar adicionar o cargo. Tente novamente.',
                     ephemeral: true
                 });
             }

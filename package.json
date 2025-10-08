@@ -1,8 +1,4 @@
 {
-  "dependencies": {
-    "discord.js": "^14.22.1",
-    "dotenv": "^17.2.3"
-  },
   "name": "kayo-main",
   "version": "1.0.0",
   "description": "",
@@ -11,6 +7,11 @@
     "deploy": "node deploy-commands.js",
     "start": "npm run deploy && node index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "discord.js": "^14.22.1",
+    "dotenv": "^17.2.3",
+    "mongoose": "^7.3.4"
   },
   "keywords": [],
   "author": "",
