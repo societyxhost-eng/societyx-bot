@@ -1,5 +1,5 @@
-const { SlashCommandBuilder, PermissionFlagsBits, ContainerBuilder, MessageFlags } = require('discord.js');
-const { logAction } = require("../utils/logger");
+const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
+const { logAction } = require('../utils/logger');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -24,50 +24,58 @@ module.exports = {
 
     const user = targetUser || (interaction.options ? interaction.options.getUser('usuario') : null);
     const rawReasonFromSlash = interaction.options ? interaction.options.getString('motivo') : null;
-    const motivo = (reasonInput ?? rawReasonFromSlash ?? '').trim() || 'Não informado';
+    const motivo = (reasonInput ?? rawReasonFromSlash ?? '').trim() || 'Motivo não informado.';
 
     if (!user) {
-      const msg = '❌ Usuário não encontrado.';
-      return interaction.editReply({ content: msg });
+      return interaction.editReply({ content: '❌ Usuário não encontrado.' });
     }
 
     try {
       const member = await interaction.guild.members.fetch(user.id).catch(() => null);
 
-      try {
-        const dmContainer = new ContainerBuilder()
-          .addTextDisplayComponents(td => td.setContent('# 🚫 Banimento'))
-          .addSeparatorComponents(separator => separator)
-          .addTextDisplayComponents(td => td.setContent(
-            `Você foi **banido permanentemente** do servidor **${interaction.guild.name}**.\n` +
-            `📝 Motivo: ${motivo}`
-          ));
-        await user.send({ components: [dmContainer], flags: [MessageFlags.IsComponentsV2] }).catch(() => {});
-      } catch { }
+      const dmEmbed = new EmbedBuilder()
+        .setTitle('🚫 Banimento de Moderação')
+        .setDescription(`Você foi **banido permanentemente** do servidor **${interaction.guild.name}**.`)
+        .setColor('#E74C3C')
+        .addFields(
+          { name: '📝 Motivo', value: motivo },
+          { name: '👮‍♂️ Moderador', value: interaction.user.tag }
+        )
+        .setTimestamp();
 
+      await user.send({ embeds: [dmEmbed] }).catch(() => {
+        console.log(`Não foi possível enviar DM para o usuário ${user.tag}.`);
+      });
+
+      const reasonForAudit = `Por: ${interaction.user.tag} • Motivo: ${motivo}`;
       if (member) {
         if (!member.bannable) {
-          return interaction.editReply({ content: `❌ Não consigo banir **${user.tag}**. Verifique hierarquia/permissões.` });
+          return interaction.editReply({
+            content: `❌ Não consigo banir **${user.tag}**. Verifique hierarquia/permissões.`
+          });
         }
-        await member.ban({ reason: motivo });
+        await member.ban({ reason: reasonForAudit });
       } else {
-        await interaction.guild.members.ban(user.id, { reason: motivo });
+        await interaction.guild.members.ban(user.id, { reason: reasonForAudit });
       }
 
+      await interaction.editReply({
+        content: `✅ ${user.tag} foi banido com sucesso.\n📝 Motivo: ${motivo}`
+      });
+
       await logAction(client, {
-        action: "Banimento",
+        action: 'Ban',
         moderator: interaction.user,
         target: user,
         reason: motivo,
-        extra: "Ban permanente"
+        extra: 'Ban permanente'
       });
-
-      const successMsg = `✅ **${user.tag}** foi banido com sucesso.\n📝 Motivo: ${motivo}`;
-      return interaction.editReply({ content: successMsg });
 
     } catch (err) {
       console.error('[BAN] Erro ao banir:', err);
-      return interaction.editReply({ content: '❌ Ocorreu um erro ao tentar banir esse usuário. Verifique permissões/hierarquia.' });
+      return interaction.editReply({
+        content: '❌ Ocorreu um erro ao tentar banir esse usuário. Verifique permissões/hierarquia.'
+      });
     }
   }
 };

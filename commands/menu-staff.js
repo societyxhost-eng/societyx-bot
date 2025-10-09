@@ -9,6 +9,7 @@ const {
   EmbedBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ComponentType
 } = require('discord.js');
 
 const warningSystem = require('../utils/warningSystem');
@@ -23,13 +24,35 @@ const panelState = new Map();
 
 const BANNERS = {
   main:           'https://i.imgur.com/XWTaQdx.jpeg',
-  warn:           'https://i.imgur.com/abcWARN.jpeg',
-  kick:           'https://i.imgur.com/abcKICK.jpeg',
-  ban:            'https://i.imgur.com/abcBAN.jpeg',
-  punir:          'https://i.imgur.com/abcPUNIR.jpeg',
-  warnings:       'https://i.imgur.com/abcWARNINGS.jpeg',
-  unban:          'https://i.imgur.com/abcUNBAN.jpeg',
+  warn:           'https://i.imgur.com/XWTaQdx.jpeg',
+  kick:           'https://i.imgur.com/XWTaQdx.jpeg',
+  ban:            'https://i.imgur.com/XWTaQdx.jpeg',
+  punir:          'https://i.imgur.com/XWTaQdx.jpeg',
+  warnings:       'https://i.imgur.com/XWTaQdx.jpeg',
+  unban:          'https://i.imgur.com/XWTaQdx.jpeg',
 };
+
+const PAGE_SIZE = 25;
+
+function buildPaginationRow(current, total) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('staff_warn_prev')
+      .setLabel('‹ Anterior')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(current <= 1),
+    new ButtonBuilder()
+      .setCustomId('staff_warn_page_info')
+      .setLabel(`Página ${current}/${total}`)
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true),
+    new ButtonBuilder()
+      .setCustomId('staff_warn_next')
+      .setLabel('Próxima ›')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(current >= total),
+  );
+}
 
 function buildBrandedEmbed(guild, title, description, bannerUrl) {
   const iconUrl = guild.iconURL({ size: 256 });
@@ -83,6 +106,21 @@ function buildBackButtonRow(customId = 'staff_back_page1') {
   );
 }
 
+async function toast(i, content, ms = 3000) {
+  try {
+    const msg = await i.followUp({ content, flags: EPHEMERAL_FLAG });
+    setTimeout(() => msg.delete().catch(() => {}), ms);
+    return msg;
+  } catch {
+    return null;
+  }
+}
+
+async function safeEditPanel(interaction, payload) {
+  const { embeds = [], components = [] } = payload || {};
+  return interaction.editReply({ embeds, components });
+}
+
 async function resolveUserLabel(interaction, userId) {
   let member = interaction.guild.members.cache.get(userId);
   if (member) return member.displayName || member.user?.tag || userId;
@@ -100,21 +138,11 @@ async function resolveUserLabel(interaction, userId) {
   return userId;
 }
 
-function buildWarningsPanelSkeleton(interaction) {
-  const embed = buildBrandedEmbed(
-    interaction.guild,
-    `${BRAND} — Avisos`,
-    'Selecione um usuário para ver/remover avisos.',
-    BANNERS.warnings
-  );
-  const rows = [];
-  rows.push(buildBackButtonRow('staff_back_from_warnings'));
-  return { embed, components: rows };
-}
-
 async function buildWarningsPanel(interaction, page = 1, cachedUsersList = null) {
   const all = warningSystem.getAllWarnings(interaction.guild.id) || {};
-  const users = cachedUsersList ?? Object.keys(all).filter(id => Array.isArray(all[id]) && all[id].length > 0);
+
+  const baseList = cachedUsersList ?? Object.keys(all);
+  const users = baseList.filter(id => Array.isArray(all[id]) && all[id].length > 0);
 
   const totalPages = Math.max(1, Math.ceil(users.length / PAGE_SIZE));
   const safePage = Math.min(Math.max(1, page), totalPages);
@@ -138,24 +166,30 @@ async function buildWarningsPanel(interaction, page = 1, cachedUsersList = null)
     for (const userId of slice) {
       const member = interaction.guild.members.cache.get(userId);
       let label = member?.displayName || member?.user?.tag || null;
-      if (!label) {
-        label = await resolveUserLabel(interaction, userId);
-      }
+      if (!label) label = await resolveUserLabel(interaction, userId);
+
+      const arr = Array.isArray(all[userId]) ? all[userId] : [];
+      const count = arr.length;
+
       options.push({
         label,
         value: userId,
-        description: `${all[userId].length} aviso(s)`,
+        description: `${count} aviso(s)`,
       });
     }
 
-    rows.push(
-      new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId('staff_select_user_warnings')
-          .setPlaceholder('Selecionar usuário…')
-          .addOptions(options)
-      )
-    );
+    if (options.length) {
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId('staff_select_user_warnings')
+            .setPlaceholder('Selecionar usuário…')
+            .addOptions(options)
+        )
+      );
+    } else {
+      embed.addFields({ name: 'Status', value: 'Sem avisos no servidor.' });
+    }
   }
 
   if (users.length > PAGE_SIZE) {
@@ -178,7 +212,8 @@ async function buildUserWarningsDetailPanel(interaction, userId) {
   }
   const display = member?.displayName || user?.tag || userId;
 
-  const entries = warningSystem.getUserWarnings(interaction.guild.id, userId) || [];
+  const entriesRaw = warningSystem.getUserWarnings(interaction.guild.id, userId) || [];
+  const entries = Array.isArray(entriesRaw) ? entriesRaw : [];
 
   const embed = buildBrandedEmbed(
     interaction.guild,
@@ -192,10 +227,10 @@ async function buildUserWarningsDetailPanel(interaction, userId) {
     embed.setDescription(
       entries.map(w => {
         const reasonStr = String(
-          typeof w.reason === 'undefined' || w.reason === null ? '—' : w.reason
+          typeof w?.reason === 'undefined' || w?.reason === null ? '—' : w.reason
         );
-        const ts = Math.floor((w.timestamp || Date.now()) / 1000);
-        return `• ID: \`${w.id || 'N/A'}\` • <t:${ts}:R>\n  Motivo: ${reasonStr}`;
+        const ts = Math.floor((w?.timestamp || Date.now()) / 1000);
+        return `• ID: \`${w?.id || 'N/A'}\` • <t:${ts}:R>\n  Motivo: ${reasonStr}`;
       }).join('\n\n')
     );
   }
@@ -203,7 +238,7 @@ async function buildUserWarningsDetailPanel(interaction, userId) {
   const rows = [];
 
   const options = entries
-    .filter(w => w?.id)
+    .filter(w => w && w.id)
     .map(w => {
       const reasonStr = String(
         typeof w.reason === 'undefined' || w.reason === null ? 'Sem motivo' : w.reason
@@ -276,8 +311,7 @@ module.exports = {
     await interaction.deferReply({ flags: EPHEMERAL_FLAG });
 
     const mainEmbed = buildMainEmbed(interaction.guild);
-
-    await interaction.editReply({
+    await safeEditPanel(interaction, {
       embeds: [mainEmbed],
       components: buildPage1Rows(),
     });
@@ -285,15 +319,17 @@ module.exports = {
     const panelMsg = await interaction.fetchReply();
     panelState.set(panelMsg.id, { state: 'main' });
 
-    const collector = panelMsg.createMessageComponentCollector({ time: 600_000 });
+    const collector = panelMsg.createMessageComponentCollector({
+      idle: 90_000,
+    });
 
     collector.on('collect', async (i) => {
       const state = panelState.get(panelMsg.id) || { state: 'main' };
 
       if (i.customId === 'staff_clear_main_select') {
-        await i.deferUpdate();
+        await i.deferUpdate(); 
         const mainEmbedUpdated = buildMainEmbed(i.guild);
-        await interaction.editReply({
+        await safeEditPanel(interaction, {
           embeds: [mainEmbedUpdated],
           components: buildPage1Rows(),
         });
@@ -338,44 +374,61 @@ module.exports = {
             );
           }
           modal.addComponents(...rows);
-          return i.showModal(modal);
+          return i.showModal(modal); 
         }
 
-        await i.deferUpdate();
+        await i.deferUpdate(); 
         if (v === 'warnings') {
-          const panel = await buildWarningsPanel(i);
-          await interaction.editReply({ embeds: [panel.embed], components: panel.components });
-          panelState.set(panelMsg.id, { state: 'warnings' });
+          const panel = await buildWarningsPanel(i, 1);
+          await safeEditPanel(interaction, { embeds: [panel.embed], components: panel.components });
+          panelState.set(panelMsg.id, { state: 'warnings', data: { users: panel.users, page: panel.page, totalPages: panel.totalPages } });
           return;
         }
         if (v === 'unban') {
           const bansPanel = await buildBansPanel(i);
-          await interaction.editReply({ embeds: [bansPanel.embed], components: bansPanel.components });
+          await safeEditPanel(interaction, { embeds: [bansPanel.embed], components: bansPanel.components });
           panelState.set(panelMsg.id, { state: 'unban' });
           return;
         }
       }
 
+      if (i.customId === 'staff_warn_prev' || i.customId === 'staff_warn_next') {
+        await i.deferUpdate(); 
+        const st = panelState.get(panelMsg.id);
+        const current = st?.data?.page || 1;
+        const users = st?.data?.users || null;
+
+        const nextPage = i.customId === 'staff_warn_prev' ? current - 1 : current + 1;
+        const panel = await buildWarningsPanel(i, nextPage, users);
+
+        await safeEditPanel(interaction, { embeds: [panel.embed], components: panel.components });
+        panelState.set(panelMsg.id, { state: 'warnings', data: { users: panel.users, page: panel.page, totalPages: panel.totalPages } });
+        return;
+      }
+
       if (i.customId === 'staff_back_from_warnings') {
-        await i.deferUpdate();
+        await i.deferUpdate(); 
         const mainEmbedUpdated = buildMainEmbed(i.guild);
-        await interaction.editReply({ embeds: [mainEmbedUpdated], components: buildPage1Rows() });
+        await safeEditPanel(interaction, { embeds: [mainEmbedUpdated], components: buildPage1Rows() });
         panelState.set(panelMsg.id, { state: 'main' });
         return;
       }
 
       if (i.customId.startsWith('staff_back_to_warnings_')) {
-        await i.deferUpdate();
-        const panel = await buildWarningsPanel(i);
-        await interaction.editReply({ embeds: [panel.embed], components: panel.components });
-        panelState.set(panelMsg.id, { state: 'warnings' });
+        await i.deferUpdate(); 
+        const st = panelState.get(panelMsg.id);
+        const page = st?.data?.page || 1;
+        const users = st?.data?.users || null;
+        const panel = await buildWarningsPanel(i, page, users);
+        await safeEditPanel(interaction, { embeds: [panel.embed], components: panel.components });
+        panelState.set(panelMsg.id, { state: 'warnings', data: { users: panel.users, page: panel.page, totalPages: panel.totalPages } });
         return;
       }
 
       if (i.customId === 'staff_back_from_unban') {
         await i.deferUpdate();
         const mainEmbedUpdated = buildMainEmbed(i.guild);
-        await interaction.editReply({ embeds: [mainEmbedUpdated], components: buildPage1Rows() });
+        await safeEditPanel(interaction, { embeds: [mainEmbedUpdated], components: buildPage1Rows() });
         panelState.set(panelMsg.id, { state: 'main' });
         return;
       }
@@ -384,13 +437,15 @@ module.exports = {
         await i.deferUpdate();
         const userId = i.values[0];
         const detail = await buildUserWarningsDetailPanel(i, userId);
-        await interaction.editReply({ embeds: [detail.embed], components: detail.components });
-        panelState.set(panelMsg.id, { state: 'warningsDetail', data: { userId } });
+        await safeEditPanel(interaction, { embeds: [detail.embed], components: [ ...detail.components ] });
+        const st = panelState.get(panelMsg.id);
+        const data = { ...(st?.data || {}), userId };
+        panelState.set(panelMsg.id, { state: 'warningsDetail', data });
         return;
       }
 
       if (i.customId.startsWith('staff_remove_warning_select_')) {
-        await i.deferUpdate();
+        await i.deferUpdate(); // reseta o idle
         const userId = i.customId.split('_').pop();
         const warningId = i.values[0];
         const ok = !!warningSystem.removeWarning(i.guild.id, userId, warningId);
@@ -403,11 +458,13 @@ module.exports = {
             reason: `Aviso ${warningId} removido`,
           });
         }
-        await i.followUp({ content: ok ? `✅ Aviso ${warningId} removido.` : '❌ Não foi possível remover.', flags: EPHEMERAL_FLAG });
+        await toast(i, ok ? `✅ Aviso ${warningId} removido.` : '❌ Não foi possível remover.');
 
         const refreshed = await buildUserWarningsDetailPanel(i, userId);
-        await interaction.editReply({ embeds: [refreshed.embed], components: refreshed.components });
-        panelState.set(panelMsg.id, { state: 'warningsDetail', data: { userId } });
+        await safeEditPanel(interaction, { embeds: [refreshed.embed], components: [ ...refreshed.components ] });
+        const st = panelState.get(panelMsg.id);
+        const data = { ...(st?.data || {}), userId };
+        panelState.set(panelMsg.id, { state: 'warningsDetail', data });
         return;
       }
 
@@ -424,20 +481,32 @@ module.exports = {
             reason: 'Desbanimento via painel',
           });
 
-          await i.followUp({ content: `✅ Desbanido: <@${userId}>.`, flags: EPHEMERAL_FLAG });
+          await toast(i, `✅ Desbanido: <@${userId}>.`);
 
           const bansPanel = await buildBansPanel(i);
-          await interaction.editReply({ embeds: [bansPanel.embed], components: bansPanel.components });
+          await safeEditPanel(interaction, { embeds: [bansPanel.embed], components: bansPanel.components });
           panelState.set(panelMsg.id, { state: 'unban' });
         } catch {
-          await i.followUp({ content: '❌ Erro ao desbanir.', flags: EPHEMERAL_FLAG });
+          await toast(i, '❌ Erro ao desbanir.');
         }
         return;
       }
     });
 
-    collector.on('end', () => {
+    collector.on('end', async (_collected, reason) => {
       panelState.delete(panelMsg.id);
+      try {
+        await interaction.editReply({
+          content: reason === 'idle'
+            ? '⏳ Sessão do painel expirada por inatividade (90s). Use /staff novamente.'
+            : '⏳ Sessão do painel encerrada. Use /staff novamente.',
+          embeds: [],
+          components: [],
+        });
+        setTimeout(() => {
+          interaction.deleteReply().catch(() => {});
+        }, 2000);
+      } catch (_) {}
     });
   }
 };

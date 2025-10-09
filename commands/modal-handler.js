@@ -3,8 +3,7 @@ const warnCommand = require('../commands/warn');
 const kickCommand = require('../commands/kick');
 const banCommand = require('../commands/ban');
 const punirCommand = require('../commands/punir');
-
-const EPHEMERAL_FLAG = 1 << 6;
+const { toast, EPHEMERAL_FLAG } = require('../utils/toast');
 
 module.exports = (client) => {
   client.on('interactionCreate', async (interaction) => {
@@ -15,58 +14,53 @@ module.exports = (client) => {
       if (!interaction.deferred && !interaction.replied) {
         await interaction.deferReply({ flags: EPHEMERAL_FLAG });
       }
-    } catch (e) {
-    }
+    } catch {}
 
     const action = interaction.customId.replace('staff_modal_', '');
-    const userInput = interaction.fields.getTextInputValue('target_user');
-    const reasonInput = (interaction.fields.getTextInputValue('reason') || 'Sem motivo').trim();
 
+    let userInput = '';
+    let reasonInput = 'Sem motivo';
     let durationInput = null;
-    try {
-      durationInput = interaction.fields.getTextInputValue('duration');
-    } catch (_) {}
+
+    try { userInput = interaction.fields.getTextInputValue('target_user')?.trim(); } catch {}
+    try { reasonInput = (interaction.fields.getTextInputValue('reason') || 'Sem motivo').trim(); } catch {}
+    try { durationInput = interaction.fields.getTextInputValue('duration')?.trim() || null; } catch {}
 
     let targetUser = null;
     try {
       targetUser = await resolveUser(interaction.guild, userInput);
-    } catch (_) {}
+    } catch {}
 
     if (!targetUser) {
-      return interaction.editReply({
-        content: '❌ Usuário não encontrado. Verifique o ID/menção e se está no servidor.',
-      }).catch(() => {});
+      await toast(interaction, '❌ Usuário não encontrado. Verifique o ID/menção e se está no servidor.');
+      return;
     }
 
     try {
       switch (action) {
         case 'warn':
           await warnCommand.execute(interaction, client, targetUser, null, reasonInput);
-          break;
+          return;
+
         case 'kick':
-          await kickCommand.execute(interaction, client, targetUser, null, reasonInput);
-          break;
+          await kickCommand.execute(interaction, client, targetUser, reasonInput);
+          return;
+
         case 'ban':
           await banCommand.execute(interaction, client, targetUser, reasonInput);
-          break;
+          return;
+
         case 'punir':
           await punirCommand.execute(interaction, client, targetUser, durationInput, reasonInput);
-          break;
+          return;
+
         default:
-          await interaction.editReply({ content: '❌ Ação inválida.' });
+          await toast(interaction, '❌ Ação inválida.');
           return;
       }
-
-      await interaction.editReply({ content: '✅ Ação registrada.' }).catch(() => {});
     } catch (err) {
       console.error(`Erro ao executar a ação '${action}':`, err);
-      try {
-        if (interaction.deferred || interaction.replied) {
-          await interaction.editReply({ content: '❌ Ocorreu um erro ao executar a ação.' });
-        } else {
-          await interaction.reply({ content: '❌ Ocorreu um erro ao executar a ação.', flags: EPHEMERAL_FLAG });
-        }
-      } catch (_) {}
+      await toast(interaction, '❌ Ocorreu um erro ao executar a ação.');
     }
   });
 };
