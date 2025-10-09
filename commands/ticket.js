@@ -18,31 +18,39 @@ const path = require('node:path');
 
 const BRAND = 'Societyx';
 const BRAND_COLOR = 0x8f17a7;
-const BANNERS = { ticket: 'https://i.imgur.com/XWTaQdx.jpeg' };
+const BANNERS = { ticket: 'https://i.imgur.com/V7fDMxa.png' };
 
 const SUPPORT_ROLE_ID = '1407822867101388851';
 const LOG_CHANNEL_ID = '1425600226437365822';
 const PARENT_CATEGORY_ID = '1425596175297417288';
 const CLOSED_CATEGORY_ID = '1425599287156539392';
 
+const IGNORED_ROLE_ID = '1408917844170899597';
+
 const EPHEMERAL_TTL_MS = 9000;
 
+const transcriptsDir = path.join(process.cwd(), 'transcripts');
+if (!fs.existsSync(transcriptsDir)) {
+  fs.mkdirSync(transcriptsDir);
+}
+
 const CATEGORY_OPTIONS = [
-  { label: 'Dúvidas', value: 'duvidas', emoji: '❓', desc: 'Suporte geral e perguntas.' },
-  { label: 'Reclamação', value: 'reclamacao', emoji: '⚠️', desc: 'Reporte problemas e feedbacks.' },
-  { label: 'Compra de VIP', value: 'vip', emoji: '💎', desc: 'Atendimento para VIPs e pagamentos.' },
-  { label: 'Parcerias', value: 'parceria', emoji: '🤝', desc: 'Solicitações de parceria.' },
-  { label: 'Denúncia', value: 'denuncia', emoji: '🚨', desc: 'Reportar violações ou usuários.' },
+  { label: 'Dúvidas', value: 'duvidas', emoji: '❓', desc: 'Tire suas dúvidas sobre o servidor.' },
+  { label: 'Técnico', value: 'tecnico', emoji: '🛠️', desc: 'Caso tenha algum problema técnico, reporte aqui.' },
+  { label: 'VIP', value: 'vip', emoji: '💎', desc: 'Problemas ou dúvidas sobre os planos vips.' },
+  { label: 'Parcerias', value: 'parcerias', emoji: '🤝', desc: 'Caso queira fazer uma parceria com o servidor.' },
+  { label: 'Outros', value: 'outros', emoji: '📂', desc: 'Problemas ou dúvidas não listados anteriormente.' },
 ];
 
 function buildBrandedEmbed(guild, title, description, bannerUrl) {
-  const iconUrl = guild.iconURL({ size: 256 });
+  const iconUrl = guild?.iconURL?.({ size: 256 });
   const embed = new EmbedBuilder().setTitle(title).setColor(BRAND_COLOR);
   if (description) embed.setDescription(description);
   if (iconUrl) embed.setThumbnail(iconUrl);
   if (bannerUrl) embed.setImage(bannerUrl);
   return embed;
 }
+
 function buildTicketPanelEmbed(guild) {
   return buildBrandedEmbed(
     guild,
@@ -51,6 +59,7 @@ function buildTicketPanelEmbed(guild) {
     BANNERS.ticket
   );
 }
+
 function buildTicketPanelComponents() {
   const select = new StringSelectMenuBuilder()
     .setCustomId('ticket_open_select')
@@ -80,28 +89,36 @@ function sanitizeName(name) {
     .replace(/[^a-z0-9-]/g, '')
     .slice(0, 20) || 'user';
 }
+
 function categorySlug(value) {
   const cat = CATEGORY_OPTIONS.find(c => c.value === value);
   return sanitizeName(cat?.label || value || 'ticket');
 }
+
 function isTicketChannelName(name = '') { return name.startsWith('ticket-') || name.startsWith('closed-'); }
 
 function ensureStaff(interaction) {
   const m = interaction.member;
   return m?.roles?.cache?.has(SUPPORT_ROLE_ID) || m?.permissions?.has(PermissionsBitField.Flags.Administrator);
 }
+
+function hasRole(member, roleId) {
+  try { return member?.roles?.cache?.has(roleId); } catch { return false; }
+}
+
 async function safeEphemeralReply(interaction, content) {
   if (interaction.deferred || interaction.replied) {
-    await interaction.editReply(content);
+    await interaction.editReply(content).catch(() => {});
     setTimeout(() => interaction.deleteReply().catch(() => {}), EPHEMERAL_TTL_MS);
   } else {
-    await interaction.reply({ content, ephemeral: true });
+    await interaction.reply({ content, flags: 64 }).catch(() => {});
     setTimeout(() => interaction.deleteReply().catch(() => {}), EPHEMERAL_TTL_MS);
   }
 }
 
 function buildStaffControlsRow() {
   return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('ticket_staff_claim').setLabel('Assumir Ticket').setEmoji('🙋').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('ticket_staff_close').setLabel('Fechar Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId('ticket_staff_add').setLabel('Adicionar Membro').setEmoji('➕').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('ticket_staff_remove').setLabel('Remover Membro').setEmoji('➖').setStyle(ButtonStyle.Secondary),
@@ -111,45 +128,51 @@ function buildStaffControlsRow() {
 async function createTicketChannel(guild, author, reasonValue, extraDetails) {
   const usernameSlug = sanitizeName(author.username);
   const name = `ticket-${usernameSlug}`;
-
   const overwrites = [
     { id: guild.roles.everyone, deny: ['ViewChannel'] },
     { id: author.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'AttachFiles', 'EmbedLinks'] },
   ];
-  if (SUPPORT_ROLE_ID) overwrites.push({ id: SUPPORT_ROLE_ID, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'AttachFiles', 'EmbedLinks'] });
-  if (guild.members.me) overwrites.push({ id: guild.members.me.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'ManageChannels', 'AttachFiles', 'EmbedLinks'] });
-
-  const reasonSlug = reasonValue ? categorySlug(reasonValue) : 'ticket';
+  if (SUPPORT_ROLE_ID) {
+    try {
+      const supportRole = await guild.roles.fetch(SUPPORT_ROLE_ID);
+      if (supportRole) {
+        supportRole.members.forEach(staffMember => {
+          if (!hasRole(staffMember, IGNORED_ROLE_ID)) {
+            overwrites.push({ id: staffMember.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'AttachFiles', 'EmbedLinks'] });
+          }
+        });
+      }
+    } catch (error) {
+      console.error(`[Ticket System] Erro ao buscar o cargo de suporte (${SUPPORT_ROLE_ID}):`, error);
+      overwrites.push({ id: SUPPORT_ROLE_ID, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'AttachFiles', 'EmbedLinks'] });
+    }
+  }
+  if (guild.members.me) {
+    overwrites.push({ id: guild.members.me.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'ManageChannels', 'AttachFiles', 'EmbedLinks'] });
+  }
+  const cat = CATEGORY_OPTIONS.find(c => c.value === reasonValue);
+  const reasonLabel = cat?.label || (reasonValue ? categorySlug(reasonValue) : 'Ticket');
   const channel = await guild.channels.create({
     name,
     type: ChannelType.GuildText,
     parent: PARENT_CATEGORY_ID || null,
     permissionOverwrites: overwrites,
-    topic: `Ticket de ${author.tag} (${author.id}) | Motivo: ${reasonSlug}`,
-    reason: `Ticket aberto por ${author.tag} - Motivo: ${reasonSlug}`,
+    topic: `Ticket de ${author.tag} (${author.id}) | Motivo: ${reasonLabel}`,
+    reason: `Ticket aberto por ${author.tag} - Motivo: ${reasonLabel}`,
   });
-
-  const intro = [
-    `Motivo: ${reasonSlug}`,
-    extraDetails ? `Detalhes: ${extraDetails.slice(0, 1000)}` : null,
-    `Nossa equipe irá te atender em breve. Descreva seu caso com detalhes.`,
-  ].filter(Boolean).join('\n\n');
-
-  const introEmbed = buildBrandedEmbed(guild, `🎫 Ticket Aberto — ${author.username}`, intro, BANNERS.ticket);
-
-  await channel.send({
-    content: `<@${author.id}> ${SUPPORT_ROLE_ID ? `<@&${SUPPORT_ROLE_ID}>` : ''}`,
-    embeds: [introEmbed],
-    components: [buildStaffControlsRow()],
-  });
-
+  const intro = [`${cat?.emoji ?? '🎫'} Motivo: ${reasonLabel}`, cat?.desc || null, extraDetails ? `Detalhes: ${extraDetails.slice(0, 1000)}` : null, `Nossa equipe irá te atender em breve. Descreva seu caso com detalhes.`].filter(Boolean).join('\n\n');
+  const introEmbed = buildBrandedEmbed(guild, `🎫 Ticket Aberto — ${author.username}`, intro, BANNERS.ticket)
+    .setThumbnail(guild.iconURL({ size: 256 }))
+    .setFooter({ text: `Canal: #${name}` });
+  await channel.send({ content: `<@${author.id}> ${SUPPORT_ROLE_ID ? `<@&${SUPPORT_ROLE_ID}>` : ''}`, embeds: [introEmbed], components: [buildStaffControlsRow()] });
   if (LOG_CHANNEL_ID) {
     const logChan = guild.channels.cache.get(LOG_CHANNEL_ID);
     if (logChan) {
       const openEmbed = new EmbedBuilder()
-        .setTitle('🟢 Ticket Aberto')
+        .setTitle(`🟢 Ticket Aberto — #${name}`)
         .setColor(0x3ba55d)
-        .setDescription(`Canal: ${channel}\nAutor: <@${author.id}> (\`${author.tag}\`)\nMotivo: \`${reasonSlug}\``)
+        .setThumbnail(guild.iconURL({ size: 256 }))
+        .setDescription(`Canal: ${channel}\nAutor: <@${author.id}> (\`${author.tag}\`)\nMotivo: \`${reasonLabel}\``)
         .setTimestamp();
       await logChan.send({ embeds: [openEmbed] }).catch(() => {});
     }
@@ -158,8 +181,10 @@ async function createTicketChannel(guild, author, reasonValue, extraDetails) {
 }
 
 function escapeHtml(s = '') { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
 async function fetchAllMessages(channel, limitHard = 5000) {
-  let lastId; const all = [];
+  let lastId;
+  const all = [];
   while (true) {
     const fetched = await channel.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
     if (!fetched || fetched.size === 0) break;
@@ -173,201 +198,33 @@ async function fetchAllMessages(channel, limitHard = 5000) {
 
 async function generateTranscriptHTML(channel, closedBy, reason) {
   const messages = await fetchAllMessages(channel);
-  const guildIcon = channel.guild.iconURL({ size: 128 }) || '';
-  const guildName = channel.guild?.name || '';
+  const guildName = channel.guild?.name || 'Servidor Desconhecido';
   const channelName = channel.name;
-
-  const fmtTime = ts => {
-    const d = new Date(ts);
-    const date = d.toLocaleDateString();
-    const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    return { date, time, full: `${date} ${time}` };
-  };
-  const dayKey = ts => new Date(ts).toDateString();
-
-  const linkify = s => escapeHtml(s || '')
-    .replace(/https?:\/\/\S+/g, m => `<a href="${m}" target="_blank" class="link">${m}</a>`)
-    .replace(/(@everyone|@here)/g, '<span class="mention everyone">$1</span>')
-    .replace(/<@!?(\d{17,20})>/g, '<span class="mention">@usuário</span>')
-    .replace(/<@&(\d{17,20})>/g, '<span class="mention role">@cargo</span>')
-    .replace(/<#(\d{17,20})>/g, '<span class="mention channel">#canal</span>');
-
-  const mdInline = s => linkify(s)
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/__(.+?)__/g, '<u>$1</u>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/^> (.+)$/gm, '<div class="quote">$1</div>');
-
-  const renderContent = s => {
-    if (!s) return '';
-    const withBlocks = s.replace(/```([\s\S]*?)```/g, (m, p1) => `[[[BLOCK:${p1}]]]`);
-    let html = mdInline(withBlocks);
-    html = html.replace(/\[\[\[BLOCK:([\s\S]*?)\]\]\]/g, (m, p1) => `<pre class="pre"><code>${escapeHtml(p1)}</code></pre>`);
-    return html;
-  };
-
-  const days = [];
-  let currentDay = null;
-  let lastAuthorId = null;
-  messages.forEach(msg => {
-    const dk = dayKey(msg.createdTimestamp);
-    if (!currentDay || currentDay.key !== dk) {
-      currentDay = { key: dk, dateLabel: fmtTime(msg.createdTimestamp).date, blocks: [] };
-      days.push(currentDay);
-      lastAuthorId = null;
-    }
-    const sameAuthor = msg.author?.id === lastAuthorId;
-    const authorName = msg.member?.displayName || msg.author?.globalName || msg.author?.username || 'Usuário';
-    const avatar = msg.author?.displayAvatarURL({ size: 64 }) || '';
-    const t = fmtTime(msg.createdTimestamp);
-
-    const attachments = [...msg.attachments.values()].map(att => {
-      const name = escapeHtml(att.name || 'arquivo');
-      const url = att.url;
-      const isImg = /\.(png|jpe?g|gif|webp)$/i.test(url.split('?')[0]);
-      if (isImg) return `<div class="attach"><a href="${url}" target="_blank"><img src="${url}" alt="${name}"/></a></div>`;
-      return `<div class="attach file"><a href="${url}" target="_blank">${name}</a></div>`;
-    }).join('');
-
-    const content = renderContent(msg.content || '');
-    const hasEmbed = msg.embeds && msg.embeds.length > 0;
-    const embedsHtml = hasEmbed ? msg.embeds.map(e => {
-      const styleAttr = e.color ? ` style="border-left-color:#${e.color.toString(16).padStart(6, '0')}"` : '';
-      const title = e.title ? `<div class="emb-title">${escapeHtml(e.title)}</div>` : '';
-      const desc = e.description ? `<div class="emb-desc">${mdInline(e.description)}</div>` : '';
-      return `<div class="embed"${styleAttr}>${title}${desc}</div>`;
-    }).join('') : '';
-
-    const reactions = msg.reactions?.cache?.size ? `<div class="reactions">${[...msg.reactions.cache.values()].map(r => {
-        const count = r.count || 1;
-        const emoji = r.emoji?.name || '👍';
-        return `<span class="reaction">${escapeHtml(emoji)} ${count}</span>`;
-      }).join('')
-      }</div>` : '';
-
-    currentDay.blocks.push({
-      sameAuthor,
-      authorName, avatar, time: t, content, attachments, embedsHtml, reactions
-    });
-    lastAuthorId = msg.author?.id;
-  });
-
-  const daySections = days.map(d => {
-    const blocksHtml = d.blocks.map(b => {
-      if (b.sameAuthor) {
-        return `
-          <div class="row cont">
-            <div class="msg bubble">
-              <div class="line"><span class="time">${b.time.time}</span></div>
-              ${b.content ? `<div class="content">${b.content}</div>` : ''}
-              ${b.attachments}
-              ${b.embedsHtml}
-              ${b.reactions}
-            </div>
-          </div>`;
-      }
-      return `
-        <div class="row">
-          ${b.avatar ? `<img class="avatar" src="${b.avatar}" alt="avatar"/>` : '<div class="avatar placeholder"></div>'}
-          <div class="msg bubble">
-            <div class="head"><span class="author">${escapeHtml(b.authorName)}</span><span class="time">${b.time.time}</span></div>
-            ${b.content ? `<div class="content">${b.content}</div>` : ''}
-            ${b.attachments}
-            ${b.embedsHtml}
-            ${b.reactions}
-          </div>
-        </div>`;
-    }).join('');
-
-    return `
-      <div class="day">
-        <div class="date-bar"><span>${escapeHtml(d.dateLabel)}</span></div>
-        ${blocksHtml}
-      </div>`;
+  const fmtTime = ts => new Date(ts).toLocaleString('pt-BR');
+  const messageBlocks = messages.map(msg => {
+    const authorName = escapeHtml(msg.member?.displayName || msg.author?.globalName || msg.author?.username || 'Usuário');
+    const fallbackAvatar = `data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22 viewBox=%220 0 40 40%22><rect width=%2240%22 height=%2240%22 fill=%22%235865f2%22/><text x=%2220%22 y=%2225%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2216%22>${escapeHtml(authorName.charAt(0))}</text></svg>`;
+    const authorAvatar = msg.author?.displayAvatarURL({ size: 64 }) || fallbackAvatar;
+    const timestamp = fmtTime(msg.createdTimestamp);
+    const botTag = msg.author.bot ? '<span class="bot-tag">BOT</span>' : '';
+    const content = msg.content ? `<div>${escapeHtml(msg.content).replace(/\n/g, '<br>')}</div>` : '';
+    const attachments = msg.attachments.size > 0 ? '<div class="attachments">' + [...msg.attachments.values()].map(att => {
+      const isImg = /\.(png|jpe?g|gif|webp)$/i.test(att.url.split('?')[0]);
+      if (isImg) { return `<a href="${att.url}" target="_blank"><img src="${att.url}" alt="Anexo" class="attachment-image"></a>`; }
+      return `<a href="${att.url}" class="attachment-link" target="_blank">${escapeHtml(att.name)}</a>`;
+    }).join('') + '</div>' : '';
+    const embeds = msg.embeds.length > 0 ? '<div class="embeds">' + msg.embeds.map(e => {
+      const title = e.title ? `<div class="embed-title">${escapeHtml(e.title)}</div>` : '';
+      const description = e.description ? `<div class="embed-description">${escapeHtml(e.description).replace(/\n/g, '<br>')}</div>` : '';
+      const image = e.image?.url ? `<img src="${e.image.url}" alt="Embed Image" class="embed-image">` : '';
+      const color = e.color ? `style="border-left-color: #${e.color.toString(16).padStart(6, '0')}"` : '';
+      return `<div class="embed" ${color}>${title}${description}${image}</div>`;
+    }).join('') + '</div>' : '';
+    return `<div class="message"><div class="message-header"><img src="${authorAvatar}" alt="Avatar" class="avatar"><span class="author">${authorName}</span>${botTag}<span class="timestamp">${timestamp}</span></div><div class="message-content">${content}${attachments}${embeds}</div></div>`;
   }).join('');
-
-  const topic = channel.topic || '';
-  const match = topic.match(/Ticket de (.+?) \((\d{17,20})\)/);
-  const authorTag = match?.[1] || '';
-
-  const html = `<!DOCTYPE html>
-<html lang="pt-br">
-<head>
-<meta charset="UTF-8"/>
-<title>Transcrição • ${escapeHtml(channelName)}</title>
-<style>
-  :root{
-    --bg:#0b0e14; --panel:#0f1320; --panel2:#0c111c; --line:#1b2230; --text:#e3e5e8; --muted:#b9bbbe;
-    --accent:#5865f2; --brand:#8f17a7; --chip:#1f2535; --chip-brd:#30384a;
-  }
-  *{box-sizing:border-box}
-  html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 "gg sans","Segoe UI",Arial,Helvetica,sans-serif}
-  a{color:#9fb4ff;text-decoration:none}
-  a:hover{text-decoration:underline}
-  .wrap{max-width:980px;margin:0 auto;padding:16px 18px 44px}
-  header{position:sticky;top:0;z-index:5;background:linear-gradient(180deg,var(--bg) 70%,transparent)}
-  .titlebar{display:flex;align-items:center;gap:12px;padding:10px 0 8px}
-  .titlebar .icon{width:36px;height:36px;border-radius:10px;border:1px solid var(--line)}
-  .chname{font-size:18px;font-weight:700}
-  .meta{margin:8px 0 16px;display:flex;flex-wrap:wrap;gap:8px}
-  .chip{background:var(--chip);border:1px solid var(--chip-brd);color:var(--muted);padding:6px 10px;border-radius:999px;font-size:12px}
-  .date-bar{display:flex;align-items:center;gap:10px;margin:18px 0}
-  .date-bar:before,.date-bar:after{content:"";flex:1;height:1px;background:var(--line)}
-  .date-bar span{color:var(--muted);font-size:12px}
-  .row{display:flex;gap:12px;padding:6px 0}
-  .row.cont{margin-left:52px}
-  .avatar{width:40px;height:40px;border-radius:50%}
-  .avatar.placeholder{background:#1d2333;border:1px solid var(--line)}
-  .msg{min-width:0}
-  .bubble{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
-  .head{display:flex;align-items:baseline;gap:8px;margin-bottom:4px}
-  .author{font-weight:600;color:#ffffff}
-  .time{color:var(--muted);font-size:12px}
-  .content{white-space:pre-wrap}
-  .quote{border-left:3px solid var(--line);padding:4px 8px;margin:6px 0;color:var(--muted);background:#101522;border-radius:6px}
-  code{background:#151a28;border:1px solid #222b3d;border-radius:4px;padding:1px 4px}
-  .pre{background:#0e1424;border:1px solid #1e2740;border-radius:8px;padding:10px;overflow:auto;margin:8px 0}
-  .attach{margin-top:8px}
-  .attach img{max-width:560px;border-radius:8px;border:1px solid var(--line)}
-  .attach.file a{display:inline-block;background:#101626;border:1px solid var(--line);padding:6px 10px;border-radius:8px}
-  .embed{border-left:4px solid var(--accent);background:#0d1222;border:1px solid #1e2540;border-radius:10px;padding:8px 10px;margin-top:8px}
-  .emb-title{font-weight:600;margin-bottom:4px}
-  .emb-desc{color:#e4e6f0}
-  .reactions{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
-  .reaction{background:#141a2a;border:1px solid #232b42;border-radius:14px;padding:2px 8px;color:#cbd3f0;font-size:12px}
-  .mention{color:#c9d6ff;background:rgba(88,101,242,.15);border:1px solid rgba(88,101,242,.35);padding:0 4px;border-radius:3px}
-  .mention.channel{color:#9ec7ff}
-  .mention.role{color:#b2ffd6}
-  .mention.everyone{color:#ffd89e}
-  footer{color:var(--muted);font-size:12px;margin-top:28px;text-align:center}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <header>
-    <div class="titlebar">
-      ${guildIcon ? `<img class="icon" src="${guildIcon}" alt="icon"/>` : ''}
-      <div class="chname"># ${escapeHtml(channelName)}</div>
-    </div>
-    <div class="meta">
-      <div class="chip">Servidor: ${escapeHtml(guildName)}</div>
-      <div class="chip">Autor do ticket: ${escapeHtml(authorTag || '—')}</div>
-      <div class="chip">Fechado por: ${escapeHtml(closedBy?.username || closedBy?.tag || '—')}</div>
-      <div class="chip">Motivo: ${escapeHtml(reason || '—')}</div>
-    </div>
-  </header>
-
-  ${daySections}
-
-  <footer>Transcrição gerada em ${new Date().toLocaleString()}</footer>
-</div>
-</body>
-</html>`;
-
-  const filePath = path.join(process.cwd(), `transcript_${channel.id}.html`);
+  const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Transcript - ${escapeHtml(channelName)}</title><style>* { margin: 0; padding: 0; box-sizing: border-box; } body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #36393f; color: #dcddde; line-height: 1.6; } .header { background-color: #2f3136; padding: 20px; border-bottom: 1px solid #40444b; text-align: center; } .header h1 { color: #ffffff; font-size: 24px; margin-bottom: 10px; } .header .info { color: #b9bbbe; font-size: 14px; } .messages { max-width: 1200px; margin: 0 auto; padding: 20px; } .message { margin-bottom: 20px; padding: 10px; border-radius: 8px; background-color: #40444b; } .message-header { display: flex; align-items: center; margin-bottom: 8px; flex-wrap: wrap; } .avatar { width: 40px; height: 40px; border-radius: 50%; margin-right: 12px; } .author { font-weight: bold; color: #ffffff; margin-right: 8px; } .timestamp { color: #72767d; font-size: 12px; } .message-content { margin-left: 52px; word-wrap: break-word; } .attachments { margin-top: 10px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; } .attachment-image { max-width: 400px; max-height: 300px; border-radius: 8px; margin: 5px 0; } .attachment-link { display: inline-block; background-color: #5865f2; color: white; padding: 8px 12px; border-radius: 4px; text-decoration: none; margin: 5px 0; } .embeds { margin-top: 10px; } .embed { background-color: #2f3136; border-left: 4px solid #5865f2; padding: 12px; margin: 8px 0; border-radius: 4px; } .embed-title { font-weight: bold; color: #ffffff; margin-bottom: 8px; } .embed-description { color: #dcddde; margin-bottom: 8px; } .embed-image { max-width: 400px; max-height: 300px; border-radius: 4px; margin-top: 8px; } .bot-tag { background-color: #5865f2; color: white; font-size: 10px; padding: 2px 4px; border-radius: 3px; margin-left: 4px; vertical-align: middle; } .footer { text-align: center; padding: 20px; color: #72767d; font-size: 12px; border-top: 1px solid #40444b; margin-top: 20px; }</style></head><body><div class="header"><h1>Transcript do Canal: #${escapeHtml(channelName)}</h1><div class="info">Servidor: ${escapeHtml(guildName)}<br>Fechado por: ${escapeHtml(closedBy?.tag || 'N/A')}<br>Motivo: ${escapeHtml(reason || 'Não especificado')}<br>Total de mensagens: ${messages.length}</div></div><div class="messages">${messageBlocks}</div><div class="footer">Transcript gerado por ${BRAND}.</div></body></html>`;
+  const filePath = path.join(transcriptsDir, `transcript-${channel.id}.html`);
   fs.writeFileSync(filePath, html, 'utf8');
-  return filePath;
 }
 
 module.exports = {
@@ -382,12 +239,12 @@ module.exports = {
 
   async execute(interaction) {
     if (interaction.options.getSubcommand() === 'painel') {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
       const embed = buildTicketPanelEmbed(interaction.guild);
       const components = buildTicketPanelComponents();
       const panelMsg = await interaction.channel.send({ embeds: [embed], components });
-      try { await panelMsg.pin(); } catch (_) {}
-      await safeEphemeralReply(interaction, '✅ Painel de tickets publicado e fixado. Use esta mensagem para abrir tickets.');
+      try { await panelMsg.pin(); } catch (_) { }
+      await safeEphemeralReply(interaction, '✅ Painel de tickets publicado e fixado.');
       return;
     }
   },
@@ -397,259 +254,188 @@ module.exports = {
       await interaction.deferUpdate();
       const embed = buildTicketPanelEmbed(interaction.guild);
       const components = buildTicketPanelComponents();
-      try { await interaction.message.edit({ embeds: [embed], components }); } catch {}
+      try { await interaction.message.edit({ embeds: [embed], components }); } catch { }
       return true;
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_open_select') {
+      if (hasRole(interaction.member, IGNORED_ROLE_ID)) {
+        await safeEphemeralReply(interaction, '❌ Você não pode abrir tickets com este cargo.');
+        return true;
+      }
       const value = interaction.values?.[0];
       const cat = CATEGORY_OPTIONS.find(c => c.value === value);
       const motivo = cat?.label || value || 'ticket';
-
-      const modal = new ModalBuilder()
-        .setCustomId(`ticket_confirm_modal:${value}`)
-        .setTitle(`Confirmar: ${motivo}`.slice(0, 45));
-      const label = new TextInputBuilder()
-        .setCustomId('confirm_label')
-        .setLabel('Confirmar? Digite "Sim"')
-        .setPlaceholder(`Abrir para: ${motivo}`.slice(0, 100))
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-      const details = new TextInputBuilder()
-        .setCustomId('extra_details')
-        .setLabel('Detalhes (opcional)')
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(false);
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(label),
-        new ActionRowBuilder().addComponents(details)
-      );
+      const modal = new ModalBuilder().setCustomId(`ticket_confirm_modal:${value}`).setTitle(`Confirmar: ${motivo}`.slice(0, 45));
+      const label = new TextInputBuilder().setCustomId('confirm_label').setLabel('Confirmar? Digite "Sim"').setPlaceholder(`Abrir para: ${motivo}`.slice(0, 100)).setStyle(TextInputStyle.Short).setRequired(true);
+      const details = new TextInputBuilder().setCustomId('extra_details').setLabel('Detalhes (opcional)').setStyle(TextInputStyle.Paragraph).setRequired(false);
+      modal.addComponents(new ActionRowBuilder().addComponents(label), new ActionRowBuilder().addComponents(details));
       await interaction.showModal(modal);
       return true;
     }
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket_confirm_modal:')) {
+      if (hasRole(interaction.member, IGNORED_ROLE_ID)) {
+        await safeEphemeralReply(interaction, '❌ Você não pode abrir tickets com este cargo.');
+        return true;
+      }
       const reasonValue = interaction.customId.split(':')[1];
       const raw = (interaction.fields.getTextInputValue('confirm_label') || '').trim();
       const confirmText = raw.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
       const positives = new Set(['sim', 's', 'yes', 'y', 'ok', 'okay', 'ok.', 'confirmo', 'confirmar']);
-      if (!positives.has(confirmText)) { await safeEphemeralReply(interaction, '❎ Abertura de ticket cancelada.'); return true; }
+      if (!positives.has(confirmText)) {
+        await safeEphemeralReply(interaction, '❎ Abertura de ticket cancelada.');
+        return true;
+      }
       const extraDetails = (interaction.fields.getTextInputValue('extra_details') || '').trim();
-
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
       try {
         const ch = await createTicketChannel(interaction.guild, interaction.user, reasonValue, extraDetails);
         await safeEphemeralReply(interaction, `✅ Ticket criado: ${ch}`);
       } catch (e) {
+        console.error("Erro ao criar ticket:", e);
         await safeEphemeralReply(interaction, '❌ Não foi possível criar o ticket. Verifique as permissões do bot.');
         try {
           const logChan = LOG_CHANNEL_ID && interaction.guild.channels.cache.get(LOG_CHANNEL_ID);
           if (logChan) await logChan.send(`⚠️ Erro ao criar ticket de <@${interaction.user.id}>: ${e?.message || e}`);
-        } catch {}
+        } catch { }
       }
       return true;
     }
 
-    if (interaction.isButton() && interaction.customId.startsWith('ticket_staff_')) {
-      if (!ensureStaff(interaction)) { await safeEphemeralReply(interaction, '❌ Apenas a equipe pode usar este botão.'); return true; }
+    if (interaction.isButton() && interaction.customId === 'ticket_staff_claim') {
+      if (!ensureStaff(interaction)) {
+        await safeEphemeralReply(interaction, '❌ Apenas a equipe pode assumir tickets.');
+        return true;
+      }
+      await interaction.deferUpdate();
 
+      // Atualiza o tópico do canal para incluir quem assumiu
       const channel = interaction.channel;
-      if (!channel || channel.type !== ChannelType.GuildText || !isTicketChannelName(channel.name || '')) {
-        await safeEphemeralReply(interaction, '❌ Este canal não parece ser um ticket.');
+      let newTopic = channel.topic || '';
+      const userMention = `<@${interaction.user.id}>`;
+      if (newTopic.includes('| Assumido por:')) {
+        newTopic = newTopic.replace(/\| Assumido por:.*$/, `| Assumido por: ${userMention}`);
+      } else {
+        newTopic += ` | Assumido por: ${userMention}`;
+      }
+      await channel.setTopic(newTopic).catch(() => {});
+
+      const originalRow = interaction.message.components[0];
+      const newComponents = originalRow?.components?.filter(c => c.customId !== 'ticket_staff_claim') || [];
+      const newRow = new ActionRowBuilder().addComponents(newComponents);
+      await interaction.message.edit({ components: [newRow] }).catch(() => {});
+
+      const claimEmbed = new EmbedBuilder()
+        .setColor(0x3ba55d)
+        .setDescription(`🙋 O ticket foi assumido por ${interaction.user}. Ele(a) irá te ajudar em breve.`);
+      await interaction.channel.send({ embeds: [claimEmbed] }).catch(() => {});
+
+      return true;
+    }
+
+    if (interaction.isButton() && interaction.customId === 'ticket_staff_close') {
+      if (!ensureStaff(interaction)) {
+        await safeEphemeralReply(interaction, '❌ Apenas a equipe pode fechar tickets.');
         return true;
       }
-
-      if (interaction.customId === 'ticket_staff_close') {
-        const modal = new ModalBuilder().setCustomId('ticket_staff_close_modal').setTitle('Fechar Ticket');
-        const reasonField = new TextInputBuilder()
-          .setCustomId('close_reason')
-          .setLabel('Motivo')
-          .setPlaceholder('Explique brevemente o motivo')
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true);
-        modal.addComponents(new ActionRowBuilder().addComponents(reasonField));
-        await interaction.showModal(modal);
-        return true;
-      }
-
-      if (interaction.customId === 'ticket_staff_add') {
-        const modal = new ModalBuilder().setCustomId('ticket_staff_add_modal').setTitle('Adicionar membro ao ticket');
-        const userField = new TextInputBuilder()
-          .setCustomId('user_identifier')
-          .setLabel('ID do usuário (somente números)')
-          .setPlaceholder('Ex.: 123456789012345678')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true);
-        modal.addComponents(new ActionRowBuilder().addComponents(userField));
-        await interaction.showModal(modal);
-        return true;
-      }
-
-      if (interaction.customId === 'ticket_staff_remove') {
-        const modal = new ModalBuilder().setCustomId('ticket_staff_remove_modal').setTitle('Remover membro do ticket');
-        const userField = new TextInputBuilder()
-          .setCustomId('user_identifier')
-          .setLabel('ID do usuário (somente números)')
-          .setPlaceholder('Ex.: 123456789012345678')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true);
-        modal.addComponents(new ActionRowBuilder().addComponents(userField));
-        await interaction.showModal(modal);
-        return true;
-      }
-
+      const modal = new ModalBuilder()
+        .setCustomId('ticket_staff_close_modal')
+        .setTitle('Fechar e Deletar Ticket');
+      const reasonField = new TextInputBuilder()
+        .setCustomId('close_reason')
+        .setLabel('Motivo do Fechamento')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(reasonField));
+      await interaction.showModal(modal);
       return true;
     }
 
     if (interaction.isModalSubmit() && interaction.customId === 'ticket_staff_close_modal') {
-      if (!ensureStaff(interaction)) { await safeEphemeralReply(interaction, '❌ Apenas a equipe pode usar este botão.'); return true; }
+      if (!ensureStaff(interaction)) {
+        await safeEphemeralReply(interaction, '❌ Apenas a equipe pode fechar tickets.');
+        return true;
+      }
       const channel = interaction.channel;
-      if (!channel || channel.type !== ChannelType.GuildText || !isTicketChannelName(channel.name || '')) {
-        await safeEphemeralReply(interaction, '❌ Este canal não parece ser um ticket.');
+      if (!channel || !isTicketChannelName(channel.name)) {
+        await safeEphemeralReply(interaction, '❌ Este canal não é um ticket válido.');
         return true;
       }
 
       const reason = (interaction.fields.getTextInputValue('close_reason') || '').trim();
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
 
       try {
-        const permsCache = channel.permissionOverwrites?.cache || new Map();
-        const botId = interaction.client.user.id;
-
-        const roleOverwritesToDeny = [];
-        const userOverwritesToDeny = [];
-
-        for (const po of permsCache.values()) {
-          if (po.type === 0) { // role
-            const roleId = po.id;
-            if (roleId === channel.guild.roles.everyone.id) continue;
-            if (SUPPORT_ROLE_ID && roleId === SUPPORT_ROLE_ID) continue;
-            roleOverwritesToDeny.push(roleId);
-          } else if (po.type === 1) { // user
-            const uid = po.id;
-            if (uid === botId) continue;
-            const gm = channel.guild.members.cache.get(uid);
-            if (gm?.roles?.cache?.has(SUPPORT_ROLE_ID)) continue;
-            userOverwritesToDeny.push(uid);
-          }
-        }
-
-        const authorMatch = (channel.topic || '').match(/Ticket de .+? \((\d{17,20})\)/);
-        const authorId = authorMatch?.[1];
-        if (authorId && !userOverwritesToDeny.includes(authorId)) userOverwritesToDeny.push(authorId);
-
-        const edits = [];
-        edits.push(channel.permissionOverwrites.edit(channel.guild.roles.everyone, {
-          ViewChannel: false, SendMessages: false, ReadMessageHistory: false
-        }).catch(() => {}));
-        for (const rid of roleOverwritesToDeny) {
-          edits.push(channel.permissionOverwrites.edit(rid, {
-            ViewChannel: false, SendMessages: false, ReadMessageHistory: false
-          }).catch(() => {}));
-        }
-        for (const uid of userOverwritesToDeny) {
-          edits.push(channel.permissionOverwrites.edit(uid, {
-            ViewChannel: false, SendMessages: false, ReadMessageHistory: false
-          }).catch(() => {}));
-        }
-        if (SUPPORT_ROLE_ID) {
-          edits.push(channel.permissionOverwrites.edit(SUPPORT_ROLE_ID, {
-            ViewChannel: true, SendMessages: true, ReadMessageHistory: true, AttachFiles: true, EmbedLinks: true
-          }).catch(() => {}));
-        }
-        edits.push(channel.permissionOverwrites.edit(botId, {
-          ViewChannel: true, SendMessages: true, ReadMessageHistory: true, ManageChannels: true, AttachFiles: true, EmbedLinks: true
-        }).catch(() => {}));
-
-        await Promise.race([
-          Promise.allSettled(edits),
-          new Promise(res => setTimeout(res, 4000)),
-        ]);
-
-        const transcriptPath = await generateTranscriptHTML(channel, interaction.user, reason);
-        const attachment = new AttachmentBuilder(transcriptPath, { name: `${channel.name}.html` });
-
-        const ops = [];
-        if (CLOSED_CATEGORY_ID && channel.parentId !== CLOSED_CATEGORY_ID) {
-          ops.push(channel.setParent(CLOSED_CATEGORY_ID, { lockPermissions: false }).catch(() => {}));
-        }
-        if (!channel.name.startsWith('closed-')) {
-          ops.push(channel.setName(`closed-${channel.name}`.slice(0, 90)).catch(() => {}));
-        }
-        await Promise.race([
-          Promise.allSettled(ops),
-          new Promise(res => setTimeout(res, 5000)),
-        ]);
-
-        await channel.send({
-          content: `🔒 Ticket fechado por ${interaction.user}. Motivo: ${reason}`,
-          files: [attachment],
-          components: [buildStaffControlsRow()],
-        }).catch(() => {});
+        await generateTranscriptHTML(channel, interaction.user, reason);
 
         if (LOG_CHANNEL_ID) {
           const logChan = channel.guild.channels.cache.get(LOG_CHANNEL_ID);
           if (logChan) {
+            const authorMatch = (channel.topic || '').match(/Ticket de .+? \((\d{17,20})\)/);
+            const authorId = authorMatch ? authorMatch[1] : null;
+
+            const assumedMatch = (channel.topic || '').match(/\| Assumido por: <@!?(\d{17,20})>/);
+            const assumedId = assumedMatch ? assumedMatch[1] : null;
+            const whoAssumed = assumedId ? `<@${assumedId}> (${assumedId})` : 'N/A';
+
             const closeEmbed = new EmbedBuilder()
-              .setTitle('🔴 Ticket Fechado')
+              .setTitle(`🔴 Ticket Fechado — #${channel.name}`)
               .setColor(0xeb4d4b)
-              .setDescription(`Canal: ${channel}\nFechado por: <@${interaction.user.id}> (\`${interaction.user.tag}\`)\nMotivo: ${reason}`)
+              .setThumbnail(channel.guild.iconURL({ size: 256 }))
+              .setDescription('Ticket foi encerrado, segue as informações abaixo:')
+              .addFields(
+                { name: 'Quem abriu o ticket:', value: authorId ? `<@${authorId}> (${authorId})` : 'Desconhecido', inline: true },
+                { name: 'Quem assumiu:', value: whoAssumed, inline: true },
+                { name: 'Quem fechou o ticket:', value: `<@${interaction.user.id}> (${interaction.user.id})`, inline: true },
+              )
               .setTimestamp();
-            logChan.send({ embeds: [closeEmbed] }).catch(() => {});
-            logChan.send({ content: '📄 Transcrição anexada', files: [attachment] }).catch(() => {});
+
+            const transcriptButton = new ButtonBuilder()
+              .setCustomId(`transcript_generate:${channel.id}`)
+              .setLabel('Transcrição')
+              .setStyle(ButtonStyle.Secondary);
+
+            const row = new ActionRowBuilder().addComponents(transcriptButton);
+
+            await logChan.send({ embeds: [closeEmbed], components: [row] }).catch(() => {});
           }
         }
 
-        await safeEphemeralReply(interaction, '✅ Ticket fechado. Acesso removido imediatamente de todos os não-staff.');
-        setTimeout(() => { try { fs.unlinkSync(transcriptPath); } catch {} }, 30000);
+        await channel.send({ content: `🔒 Ticket fechado por ${interaction.user}. **Este canal será excluído em 10 segundos.**` }).catch(() => {});
+        await safeEphemeralReply(interaction, '✅ Ticket fechado. A transcrição foi salva e o canal será excluído em 10 segundos.');
+
+        setTimeout(() => { channel.delete('Ticket fechado e arquivado.').catch(e => console.error(`Falha ao deletar o canal ${channel.id}:`, e)); }, 10000);
       } catch (e) {
+        console.error("Erro ao fechar/deletar ticket:", e);
         await safeEphemeralReply(interaction, `❌ Erro ao fechar o ticket: ${e?.message || e}`);
       }
       return true;
     }
 
-    if (interaction.isModalSubmit() && interaction.customId === 'ticket_staff_add_modal') {
+    if (interaction.isButton() && (interaction.customId === 'ticket_staff_add' || interaction.customId === 'ticket_staff_remove')) {
       if (!ensureStaff(interaction)) { await safeEphemeralReply(interaction, '❌ Apenas a equipe pode usar este botão.'); return true; }
-
       const channel = interaction.channel;
-      if (!channel || channel.type !== ChannelType.GuildText || !isTicketChannelName(channel.name || '')) {
-        await safeEphemeralReply(interaction, '❌ Este canal não parece ser um ticket.');
-        return true;
-      }
+      if (!channel || channel.type !== ChannelType.GuildText || !isTicketChannelName(channel.name || '')) { await safeEphemeralReply(interaction, '❌ Este canal não parece ser um ticket.'); return true; }
 
-      const raw = (interaction.fields.getTextInputValue('user_identifier') || '').trim();
-      const userId = raw.match(/^\d{17,20}$/)?.[0];
-
-      try {
-        if (!userId) throw new Error('ID inválido');
-
-        await channel.permissionOverwrites.edit(userId, {
-          ViewChannel: true,
-          SendMessages: true,
-          ReadMessageHistory: true,
-          AttachFiles: true,
-          EmbedLinks: true
-        });
-
-        const emb = new EmbedBuilder()
-          .setColor(0x3ba55d)
-          .setDescription(`➕ <@${userId}> foi adicionado ao ticket por ${interaction.user}.`);
-        await interaction.reply({ content: `<@${userId}>`, embeds: [emb] }).catch(async () => {
-          await channel.send({ content: `<@${userId}>`, embeds: [emb] }).catch(() => {});
-        });
-      } catch (e) {
-        await safeEphemeralReply(interaction, '❌ Informe um ID válido (17–20 dígitos) e verifique permissões do canal/categoria.');
-      }
+      const action = interaction.customId === 'ticket_staff_add' ? 'add' : 'remove';
+      const modal = new ModalBuilder().setCustomId(`ticket_staff_${action}_modal`).setTitle(`${action === 'add' ? 'Adicionar' : 'Remover'} membro ao ticket`);
+      const userField = new TextInputBuilder().setCustomId('user_identifier').setLabel('ID do usuário (somente números)').setPlaceholder('Ex.: 123456789012345678').setStyle(TextInputStyle.Short).setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(userField));
+      await interaction.showModal(modal);
       return true;
     }
 
-    if (interaction.isModalSubmit() && interaction.customId === 'ticket_staff_remove_modal') {
-      if (!ensureStaff(interaction)) { await safeEphemeralReply(interaction, '❌ Apenas a equipe pode usar este botão.'); return true; }
+    if (interaction.isModalSubmit() && (interaction.customId === 'ticket_staff_add_modal' || interaction.customId === 'ticket_staff_remove_modal')) {
+      if (!ensureStaff(interaction)) {
+        return interaction.reply({ content: '❌ Apenas a equipe pode usar este botão.', flags: 64 });
+      }
+
+      await interaction.deferReply({ flags: 64 });
 
       const channel = interaction.channel;
       if (!channel || channel.type !== ChannelType.GuildText || !isTicketChannelName(channel.name || '')) {
-        await safeEphemeralReply(interaction, '❌ Este canal não parece ser um ticket.');
-        return true;
+        return interaction.editReply({ content: '❌ Este canal não parece ser um ticket.' });
       }
 
       const raw = (interaction.fields.getTextInputValue('user_identifier') || '').trim();
@@ -658,14 +444,58 @@ module.exports = {
       try {
         if (!userId) throw new Error('ID inválido');
 
-        await channel.permissionOverwrites.delete(userId).catch(() => {});
-        const emb = new EmbedBuilder().setColor(0xeb4d4b).setDescription(`➖ <@${userId}> foi removido do ticket por ${interaction.user}.`);
+        if (interaction.customId === 'ticket_staff_add_modal') {
+          const memberToAdd = await interaction.guild.members.fetch(userId).catch(() => null);
+          if (!memberToAdd) {
+            return interaction.editReply({ content: '❌ Usuário não encontrado no servidor.' });
+          }
+          if (hasRole(memberToAdd, IGNORED_ROLE_ID)) {
+            return interaction.editReply({ content: '❌ Este usuário possui um cargo bloqueado e não pode ser adicionado ao ticket.' });
+          }
 
-        await interaction.reply({ embeds: [emb] }).catch(async () => {
-          await channel.send({ embeds: [emb] }).catch(() => {});
-        });
+          await channel.permissionOverwrites.edit(userId, {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true,
+            AttachFiles: true,
+            EmbedLinks: true,
+          });
+
+          const emb = new EmbedBuilder().setColor(0x3ba55d).setDescription(`➕ <@${userId}> foi adicionado ao ticket por ${interaction.user}.`);
+          return interaction.editReply({ content: `<@${userId}>`, embeds: [emb] });
+
+        } else {
+          await channel.permissionOverwrites.delete(userId).catch(() => {});
+          const emb = new EmbedBuilder().setColor(0xeb4d4b).setDescription(`➖ <@${userId}> foi removido do ticket por ${interaction.user}.`);
+          return interaction.editReply({ embeds: [emb] });
+        }
       } catch (e) {
-        await safeEphemeralReply(interaction, '❌ Informe um ID válido (17–20 dígitos).');
+        console.error('--- ERRO AO ADICIONAR/REMOVER MEMBRO ---', e);
+        return interaction.editReply({
+          content: '❌ Ocorreu um erro. Verifique se o ID está correto e se o bot tem permissão para "Gerenciar Canais".',
+        });
+      }
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('transcript_generate:')) {
+      if (!ensureStaff(interaction)) {
+        return interaction.reply({ content: '❌ Apenas a equipe pode visualizar transcrições.', flags: 64 });
+      }
+
+      await interaction.deferReply({ flags: 64 });
+
+      const channelId = interaction.customId.split(':')[1];
+      const filePath = path.join(transcriptsDir, `transcript-${channelId}.html`);
+
+      if (fs.existsSync(filePath)) {
+        const attachment = new AttachmentBuilder(filePath, { name: `transcript-${channelId}.html` });
+        await interaction.editReply({
+          content: `📄 Aqui está a transcrição do ticket \`${channelId}\`. Esta mensagem será apagada em 30 segundos.`,
+          files: [attachment]
+        });
+        setTimeout(() => { interaction.deleteReply().catch(() => {}); }, 30000);
+      } else {
+        await interaction.editReply({ content: '❌ Arquivo de transcrição não encontrado. Pode ter sido apagado ou houve um erro ao salvar.' });
       }
       return true;
     }

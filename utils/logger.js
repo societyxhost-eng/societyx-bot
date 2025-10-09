@@ -1,4 +1,15 @@
-const { EmbedBuilder, ChannelType, PermissionsBitField } = require('discord.js');
+const {
+  ChannelType,
+  PermissionsBitField,
+  ContainerBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder,
+  SeparatorSpacingSize,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  MessageFlags,
+} = require('discord.js');
 
 let LOG_CHANNEL_ID = '1424931738051809281';
 
@@ -79,60 +90,51 @@ function asStringSafe(val, fallback = 'Não informado') {
   return String(val);
 }
 
-async function logAction(client, { action, moderator, target, reason, extra, guildId }) {
+async function logAction(client, { action, moderator, target, reason, extra }) {
   const channel = await getOrCreateLogChannel(client);
   if (!channel) return;
 
-  const guild =
-    (guildId && client.guilds.cache.get(guildId)) ||
-    channel.guild ||
-    client.guilds.cache.first();
+  const info = ACTIONS[action] || ACTIONS.Default;
+  const accent =
+    typeof info.color === 'string'
+      ? Number(info.color.replace('#', '0x'))
+      : info.color ?? 0x2f3136;
 
-  const normalized = ALIASES[String(action || '').toLowerCase()] || action || 'Default';
-  const info = ACTIONS[normalized] || ACTIONS.Default;
+  const container = new ContainerBuilder()
+    .setAccentColor(accent);
 
-  const moderatorName =
-    moderator?.tag || moderator?.username || (moderator?.id && `ID: ${moderator.id}`) || 'Desconhecido';
+  const sep = new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small);
 
-  const targetName =
-    target?.tag || target?.username || (target?.id && `ID: ${target.id}`) || 'N/A';
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`## ${info.emoji ?? ''} ${info.title}`)
+  );
+  container.addSeparatorComponents(sep);
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`**👮 Moderador:** ${moderator?.tag ?? 'Desconhecido'}`),
+    new TextDisplayBuilder().setContent(`**👤 Usuário:** ${target?.tag ?? 'N/A'}`),
+    new TextDisplayBuilder().setContent(`**🆔 ID do Usuário:** ${target?.id ?? 'N/A'}`),
+    new TextDisplayBuilder().setContent(`**⚖️ Ação:** ${action}`),
+    new TextDisplayBuilder().setContent(`**📄 Motivo:** ${reason || 'Não informado'}`),
+    ...(extra ? [new TextDisplayBuilder().setContent(`**📌 Detalhes:** ${extra}`)] : [])
+  );
+  container.addSeparatorComponents(sep);
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`*Sistema de Moderação • ${new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour12: false, dateStyle: 'short', timeStyle: 'medium' }).format(new Date())}*`)
+  );
 
-  const targetId = target?.id || 'N/A';
-  const reasonStr = asStringSafe(reason, 'Não informado');
-  const detailsStr = extra ? asStringSafe(extra) : null;
-
-  const authorName = USE_GUILD_BRAND
-    ? (guild?.name || client.user.username)
-    : client.user.username;
-
-  const authorIcon = USE_GUILD_BRAND
-    ? guild?.iconURL?.({ size: 128 }) || client.user.displayAvatarURL({ size: 128 })
-    : client.user.displayAvatarURL({ size: 128 });
-
-  const embed = new EmbedBuilder()
-    .setColor(info.color)
-    .setTitle(`${info.emoji} ${info.title}`)
-    .setAuthor({
-      name: authorName,
-      iconURL: authorIcon || undefined,
-    })
-    .addFields(
-      { name: '⚖️ Ação', value: String(normalized), inline: true },
-      { name: '👮 Moderador', value: moderatorName, inline: true },
-      { name: '👤 Usuário', value: targetName, inline: true },
-      { name: '🆔 ID do Usuário', value: String(targetId), inline: true },
-      { name: '📄 Motivo', value: reasonStr },
-      ...(detailsStr ? [{ name: '📌 Detalhes', value: detailsStr }] : []),
-      { name: '🕒 Data/Hora', value: formatDateToBR() }
-    )
-    .setFooter({
-      text: client.user.username,
-      iconURL: client.user.displayAvatarURL({ size: 64 }),
-    })
-    .setTimestamp();
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setLabel('🔗 Perfil')
+      .setStyle(ButtonStyle.Link)
+      .setURL(`https://discord.com/users/${target?.id ?? ''}`)
+  );
+  container.addActionRowComponents(row);
 
   try {
-    await channel.send({ embeds: [embed] });
+    await channel.send({
+      components: [container],
+      flags: MessageFlags.IsComponentsV2,
+    });
   } catch (err) {
     console.error('[Logger] Falha ao enviar log:', err);
   }

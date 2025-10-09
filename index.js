@@ -67,19 +67,23 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    const ticketCmd = client.commands.get('ticket');
-    if (ticketCmd?.handleComponent && (interaction.isMessageComponent() || interaction.isModalSubmit())) {
+    if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
       const customId = interaction.customId ?? '';
-      if (typeof customId === 'string' && customId.startsWith('ticket_')) {
-        const handled = await ticketCmd.handleComponent(interaction);
-        if (handled) return;
+
+      if (customId.startsWith('ticket_') || customId.startsWith('transcript_')) {
+        const ticketCommand = client.commands.get('ticket');
+        if (ticketCommand?.handleComponent) {
+
+          await ticketCommand.handleComponent(interaction);
+        }
       }
     }
-
   } catch (err) {
     console.error('Erro na interactionCreate:', err);
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: '❌ Ocorreu um erro.', ephemeral: true });
+    if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ content: '❌ Ocorreu um erro ao processar esta ação.', ephemeral: true }).catch(console.error);
+    } else if (!interaction.replied) {
+        await interaction.reply({ content: '❌ Ocorreu um erro.', ephemeral: true }).catch(console.error);
     }
   }
 });
