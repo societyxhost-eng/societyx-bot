@@ -25,8 +25,6 @@ const LOG_CHANNEL_ID = '1425600226437365822';
 const PARENT_CATEGORY_ID = '1425596175297417288';
 const CLOSED_CATEGORY_ID = '1425599287156539392';
 
-const IGNORED_ROLE_ID = '1408917844170899597';
-
 const EPHEMERAL_TTL_MS = 9000;
 
 const transcriptsDir = path.join(process.cwd(), 'transcripts');
@@ -127,24 +125,26 @@ function buildStaffControlsRow() {
 
 async function createTicketChannel(guild, author, reasonValue, extraDetails) {
   const usernameSlug = sanitizeName(author.username);
+  const technicalRoleId = '1423874390361378856';
+  const roleIdToUse = (reasonValue === 'tecnico') ? technicalRoleId : SUPPORT_ROLE_ID;
   const name = `ticket-${usernameSlug}`;
   const overwrites = [
     { id: guild.roles.everyone, deny: ['ViewChannel'] },
     { id: author.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'AttachFiles', 'EmbedLinks'] },
   ];
-  if (SUPPORT_ROLE_ID) {
+  if (roleIdToUse) {
     try {
-      const supportRole = await guild.roles.fetch(SUPPORT_ROLE_ID);
+      const supportRole = await guild.roles.fetch(roleIdToUse);
       if (supportRole) {
         supportRole.members.forEach(staffMember => {
-          if (!hasRole(staffMember, IGNORED_ROLE_ID)) {
+          if (!hasRole(staffMember)) {
             overwrites.push({ id: staffMember.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'AttachFiles', 'EmbedLinks'] });
           }
         });
       }
     } catch (error) {
-      console.error(`[Ticket System] Erro ao buscar o cargo de suporte (${SUPPORT_ROLE_ID}):`, error);
-      overwrites.push({ id: SUPPORT_ROLE_ID, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'AttachFiles', 'EmbedLinks'] });
+      console.error(`[Ticket System] Erro ao buscar o cargo de suporte (${roleIdToUse}):`, error);
+      overwrites.push({ id: roleIdToUse, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'AttachFiles', 'EmbedLinks'] });
     }
   }
   if (guild.members.me) {
@@ -164,7 +164,7 @@ async function createTicketChannel(guild, author, reasonValue, extraDetails) {
   const introEmbed = buildBrandedEmbed(guild, `🎫 Ticket Aberto — ${author.username}`, intro, BANNERS.ticket)
     .setThumbnail(guild.iconURL({ size: 256 }))
     .setFooter({ text: `Canal: #${name}` });
-  await channel.send({ content: `<@${author.id}> ${SUPPORT_ROLE_ID ? `<@&${SUPPORT_ROLE_ID}>` : ''}`, embeds: [introEmbed], components: [buildStaffControlsRow()] });
+  await channel.send({ content: `<@${author.id}> ${roleIdToUse ? `<@&${roleIdToUse}>` : ''}`, embeds: [introEmbed], components: [buildStaffControlsRow()] });
   if (LOG_CHANNEL_ID) {
     const logChan = guild.channels.cache.get(LOG_CHANNEL_ID);
     if (logChan) {
@@ -239,7 +239,7 @@ module.exports = {
 
   async execute(interaction) {
     if (interaction.options.getSubcommand() === 'painel') {
-      await interaction.deferReply({ flags: 64 });
+      await interaction.deferReply();
       const embed = buildTicketPanelEmbed(interaction.guild);
       const components = buildTicketPanelComponents();
       const panelMsg = await interaction.channel.send({ embeds: [embed], components });
@@ -259,7 +259,7 @@ module.exports = {
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_open_select') {
-      if (hasRole(interaction.member, IGNORED_ROLE_ID)) {
+      if (hasRole(interaction.member)) {
         await safeEphemeralReply(interaction, '❌ Você não pode abrir tickets com este cargo.');
         return true;
       }
@@ -275,7 +275,7 @@ module.exports = {
     }
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket_confirm_modal:')) {
-      if (hasRole(interaction.member, IGNORED_ROLE_ID)) {
+      if (hasRole(interaction.member)) {
         await safeEphemeralReply(interaction, '❌ Você não pode abrir tickets com este cargo.');
         return true;
       }
@@ -445,37 +445,40 @@ module.exports = {
         if (!userId) throw new Error('ID inválido');
 
         if (interaction.customId === 'ticket_staff_add_modal') {
-          const memberToAdd = await interaction.guild.members.fetch(userId).catch(() => null);
-          if (!memberToAdd) {
-            return interaction.editReply({ content: '❌ Usuário não encontrado no servidor.' });
-          }
-          if (hasRole(memberToAdd, IGNORED_ROLE_ID)) {
-            return interaction.editReply({ content: '❌ Este usuário possui um cargo bloqueado e não pode ser adicionado ao ticket.' });
-          }
+      const memberToAdd = await interaction.guild.members.fetch(userId).catch(() => null);
+      if (!memberToAdd) return interaction.editReply({ content: '❌ Usuário não encontrado no servidor.' });
+      if (hasRole(memberToAdd)) return interaction.editReply({ content: '❌ Este usuário possui um cargo bloqueado.' });
 
-          await channel.permissionOverwrites.edit(userId, {
-            ViewChannel: true,
-            SendMessages: true,
-            ReadMessageHistory: true,
-            AttachFiles: true,
-            EmbedLinks: true,
-          });
+      await channel.permissionOverwrites.edit(userId, {
+        ViewChannel: true,
+        SendMessages: true,
+        ReadMessageHistory: true,
+        AttachFiles: true,
+        EmbedLinks: true,
+      });
 
-          const emb = new EmbedBuilder().setColor(0x3ba55d).setDescription(`➕ <@${userId}> foi adicionado ao ticket por ${interaction.user}.`);
-          return interaction.editReply({ content: `<@${userId}>`, embeds: [emb] });
+      const emb = new EmbedBuilder()
+        .setColor(0x3ba55d)
+        .setDescription(`➕ <@${userId}> foi adicionado ao ticket por ${interaction.user}.`);
 
-        } else {
-          await channel.permissionOverwrites.delete(userId).catch(() => {});
-          const emb = new EmbedBuilder().setColor(0xeb4d4b).setDescription(`➖ <@${userId}> foi removido do ticket por ${interaction.user}.`);
-          return interaction.editReply({ embeds: [emb] });
-        }
-      } catch (e) {
-        console.error('--- ERRO AO ADICIONAR/REMOVER MEMBRO ---', e);
-        return interaction.editReply({
-          content: '❌ Ocorreu um erro. Verifique se o ID está correto e se o bot tem permissão para "Gerenciar Canais".',
-        });
-      }
+      await channel.send({ embeds: [emb] }); 
+      await interaction.deleteReply(); 
+    } else {
+      await channel.permissionOverwrites.delete(userId).catch(() => {});
+      const emb = new EmbedBuilder()
+        .setColor(0xeb4d4b)
+        .setDescription(`➖ <@${userId}> foi removido do ticket por ${interaction.user}.`);
+
+      await channel.send({ embeds: [emb] }); 
+      await interaction.deleteReply();
     }
+  } catch (e) {
+    console.error('--- ERRO AO ADICIONAR/REMOVER MEMBRO ---', e);
+    return interaction.editReply({
+      content: '❌ Ocorreu um erro. Verifique se o ID está correto e se o bot tem permissão para "Gerenciar Canais".',
+    });
+  }
+}
 
     if (interaction.isButton() && interaction.customId.startsWith('transcript_generate:')) {
       if (!ensureStaff(interaction)) {
